@@ -1,0 +1,62 @@
+import numpy as np
+import pandas as pd
+from numpy.linalg import inv
+
+# Assuming data is stored in a DataFrame called 'data'
+data = pd.read_csv("portfolio_data.csv")
+
+# Extracting market cap and sector data
+market_cap = data['market_cap']
+sectors = data['sector']
+
+# Creating a dictionary to store sector market cap data
+sector_market_cap = {}
+
+# Iterating through sectors to calculate total market cap for each sector
+for i in range(len(sectors)):
+    if sectors[i] not in sector_market_cap:
+        sector_market_cap[sectors[i]] = market_cap[i]
+    else:
+        sector_market_cap[sectors[i]] += market_cap[i]
+
+# Calculating portfolio weight for each stock
+portfolio_weight = {}
+for i in range(len(sectors)):
+    portfolio_weight[data.iloc[i]['stock_name']] = market_cap[i] / sector_market_cap[sectors[i]]
+
+# Calculating portfolio exposure in each sector
+portfolio_exposure = {}
+for i in range(len(sectors)):
+    if sectors[i] not in portfolio_exposure:
+        portfolio_exposure[sectors[i]] = market_cap[i] / sector_market_cap[sectors[i]]
+    else:
+        portfolio_exposure[sectors[i]] += market_cap[i] / sector_market_cap[sectors[i]]
+
+# Extracting sector returns data
+sector_returns = data['sector_returns']
+
+# Creating a matrix of sector exposures and returns
+matrix = np.array([list(portfolio_exposure.values()), sector_returns])
+
+# Calculating the transpose of the matrix
+matrix_transpose = matrix.transpose()
+
+# Calculating the inverse of the matrix
+matrix_inverse = inv(matrix.dot(matrix_transpose))
+
+# Calculating the pure factor weight
+pure_factor_weight = matrix_inverse.dot(matrix)
+
+# Calculating the specific return
+specific_return = np.eye(len(portfolio_weight)) - pure_factor_weight
+
+# Calculating the factor return
+factor_return = pure_factor_weight.dot(sector_returns)
+
+# Calculating R2
+R2 = 1 - (np.var(specific_return) / np.var(sector_returns))
+
+print("Pure Factor Weight:", pure_factor_weight)
+print("Specific Return:", specific_return)
+print("Factor Return:", factor_return)
+print("R2:", R2)
