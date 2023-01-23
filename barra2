@@ -1,0 +1,61 @@
+import numpy as np
+import pandas as pd
+
+# Load data into a pandas DataFrame
+df = pd.read_csv('data.csv')
+
+# Add a column for market capitalization
+df['market_cap'] = df['price'] * df['shares_outstanding']
+
+# Calculate factor exposures
+factor_exposures = df.dot(factor_loading_matrix)
+
+# Adjust factor exposures for market capitalization
+market_cap_adjustment = df['market_cap'] / df['market_cap'].mean()
+factor_exposures = factor_exposures * market_cap_adjustment
+
+# Create a constraint matrix R
+R = np.eye(1 + sec_coln + style_coln)
+
+# Assign a specific value to a specific element in the constraint matrix R
+R[sec_col_n, sec_col_n] = -industry_mcap / industry_mcap.shift(1)
+
+# Delete a specific column from the constraint matrix R
+R = np.delete(R, sec_col_n, axis=1)
+
+# Create a factors matrix by concatenating two separate matrices: factor_sec and factor_frame
+factors = np.hstack([factor_sec, factor_frame]))
+
+# Transpose the factors matrix
+factors_tran = factors.T
+
+# Calculate the pure factor portfolio weights
+pure_factor_portfolio_weight = np.linalg.inv(factors_tran @ factors) @ factors_tran @ np.ones(len(df))
+
+# Normalize the portfolio weights to sum to 1
+pure_factor_portfolio_weight = pure_factor_portfolio_weight / pure_factor_portfolio_weight.sum()
+
+# Calculate the factor returns
+factor_ret = pure_factor_portfolio_weight @ rets.values
+
+# Calculate the specific returns
+specific_ret = rets - factor_ret
+
+# Calculate the R-squared value
+R2 = 1 - np.var(specific_ret) / np.var(rets)
+
+# Return the results
+return (factor_ret, specific_ret, pure_factor_portfolio_weight, R2)
+
+
+
+
+
+
+
+This code uses the dot product of the dataframe df and the factor_loading_matrix to calculate the factor exposures. Then it adjust the factor exposures for market capitalization using the market_cap_adjustment factor, this factor is calculated by dividing the market capitalization of each stock by the mean of the market capitalization of all stocks. Next, it creates a constraint matrix R which is a matrix with 1 + sec_coln + style_coln dimensions, and sets the diagonal values to 1, then it assigns a specific value to a specific element in the constraint matrix R and deletes a specific column from the constraint matrix R. After that it concatenates the two separate matrices factor_sec and factor_frame, and transposes the resulting matrix. Then it calculates the pure factor portfolio weights by solving a linear equation using the factors matrix, inv and matmul functions from numpy. The code normalizes the portfolio weights to sum to 1 and calculates the factor returns by multiplying the pure factor portfolio weights and the returns values. Then it calculates the specific returns by subtracting the factor returns from the returns and finally calculates the R^2 value by dividing the variance of the specific returns by the variance of the total returns.
+
+Please note that this is a simplified example and might require some modification to work with your specific use case. Also, it is important to make sure that the dataframe, variables and the constraint matrix R are correctly defined and aligned with the size and dimension of data and the objective of the problem.
+
+
+
