@@ -1,0 +1,14 @@
+import numpy as np
+import pandas as pd
+from scipy.stats import pearsonr
+
+def factor_stability_coefficient(factor_exposures):
+    T = len(factor_exposures)
+    correlations = []
+    for t in range(T-1):
+        correlations.append(pearsonr(factor_exposures.iloc[t], factor_exposures.iloc[t+1])[0])
+    return np.mean(correlations)
+
+factor_exposures = pd.read_csv('factor_exposures.csv', index_col='Date')
+factor_stability = factor_stability_coefficient(factor_exposures)
+print('Factor stability coefficient:', factor_stability)
