@@ -1,0 +1,61 @@
+def identify_conviction_change_before_exit(df):
+    """
+    Identify when the conviction changes before an exit.
+
+    Parameters:
+        df (pandas.DataFrame): Input dataframe containing trades data.
+    
+    Returns:
+        pandas.DataFrame: Output dataframe containing additional columns for conviction change information.
+    """
+    
+    # Initialize an empty list to hold the results for each instrument
+    results = []
+    
+    # Group the input dataframe by instrument ID
+    for instrument_id, group_df in df.groupby('iliteInstrumentId'):
+        
+        # Sort the group dataframe by business date in ascending order
+        group_df = group_df.sort_values('businessDate', ascending=True)
+        
+        # Filter the group dataframe to only include rows where there is a change in quantity
+        group_df = group_df[group_df['change_in_quantity'] != 0]
+        
+        # Adjust the sign of the change in quantity column based on whether the position traded quantity is positive or negative
+        group_df.loc[group_df['positionTradedQuantity'] > 0, 'change_in_quantity'] *= -1
+        
+        # Calculate the percentage change in position traded quantity from the previous row
+        group_df['perc_change'] = group_df['positionTradedQuantity'].pct_change()
+        
+        # Add a column for the previous position traded quantity
+        group_df['previous_qty'] = group_df['positionTradedQuantity'].shift()
+        
+        # Remove rows corresponding to rebalancing dates, except for rows where the event type is 'Exit'
+        rebalancing_dates = df[df['event_type'] == 'Rebalance']
+        group_df = group_df[~group_df['businessDate'].isin(rebalancing_dates['businessDate']) | (group_df['event_type'] == 'Exit')]
+        
+        # Add a dummy counter column to group rows where the change in quantity is less than zero
+        group_df['dummy_c'] = (group_df['change_in_quantity'] < 0).cumsum()
+        
+        # Replace the dummy counter column with -100 for rows where the event type is 'Exit'
+        group_df.loc[group_df['event_type'] == 'Exit', 'dummy_c'] = -100
+        
+        # Remove rows with dummy counter values other than 0, 1, or -100
+        group_df = group_df[group_df['dummy_c'].isin([0, 1, -100])]
+        
+        # Add a dummy division column to group rows with adjacent values of the dummy counter column
+        group_df['dummy_d'] = group_df['dummy_c'].div(group_df['dummy_c'].shift(-1))
+        
+        # Keep only rows where the dummy division column is equal to -0.01 or where the event type is 'Exit'
+        group_df = group_df[(group_df['dummy_d'] == -0.01) | (group_df['event_type'] == 'Exit')]
+        
+        # Add columns for the date when the conviction changed, the position traded quantity when the conviction changed,
+        # the previous event type, the percentage change in position traded quantity from the first trimming date,
+        # and the change in quantity from the first trimming date
+        group_df['conviction_change_date'] = group_df['businessDate'].shift()
+        group_df['qty_when_conviction_changed'] = group_df['previous_qty'].shift()
+        group_df['previous_event'] = group_df['event_type'].shift()
+        group_df['first_trim_pct'] = group_df['perc_change'].shift()
+        group_df['first_trim_qty'] = group_df['change_in_quantity'].shift()
+        
+        # Update the conviction change date column to handle cases where the previous
