@@ -5,28 +5,51 @@
 data = []
 
 for group in df_exit_counter.groupby(df_exit_counter['iliteInstrumentId']):
+    
+    
     temp_df = group[1].sort_values('businessDate',ascending=True)
     temp_df  = temp_df.query('change_in_quantity  != 0')
+    
+    
+    
     temp_df['change_in_quantity'] = np.where(temp_df['positionTradedQuantity'] > 0,temp_df['change_in_quantity']*-1,temp_df['change_in_quantity'])
     temp_df['perc_change'] = temp_df['positionTradedQuantity'].pct_change() # require some more checks and validation
+    temp_df['previous_qty'] = temp_df['positionTradedQuantity'].shift()
+    temp_df  = temp_df[(~temp_df['businessDate'].isin(rebalancing_dates.businessDate.to_list())) | ((temp_df['event_type'] == 'Exit'))] ### Removing entries from rebalacing dates excluding when Exit happens
+    #print_full(temp_df)
     temp_df['dummy_c'] = (temp_df.groupby(temp_df['change_in_quantity'].lt(0).cumsum()).cumcount())
     temp_df['dummy_c'] = np.where(temp_df['event_type'] == 'Exit',-100,temp_df['dummy_c'])
     temp_df = temp_df[temp_df['dummy_c'].isin([0,1,-100])]
+    
     temp_df['dummy_d'] = temp_df['dummy_c'].div(temp_df['dummy_c'].shift(-1))
     temp_df = temp_df[(temp_df['dummy_d'] == -0.01) | (temp_df['event_type'] == 'Exit')]
-    temp_df['days_to_change_conviction_till_exit'] = temp_df['businessDate'].diff() / np.timedelta64(1, 'D')
-    temp_df['days_to_change_conviction_till_exit'] = np.where(temp_df['event_type'] == 'Exit',temp_df['days_to_change_conviction_till_exit'],np.NaN)
+    
+    
+    
     temp_df['conviction_change_date'] = temp_df['businessDate'].shift()
-    temp_df['conviction_change_position_qty'] = temp_df['positionTradedQuantity'].shift()
+    temp_df['qty_when_conviction_changed'] = temp_df['previous_qty'].shift()
     temp_df['previous_event'] = temp_df['event_type'].shift()
     temp_df['first_trim_pct'] = temp_df['perc_change'].shift()
+    temp_df['first_trim_qty'] = temp_df['change_in_quantity'].shift()
+    
+    
     temp_df['conviction_change_date']  = np.where(((temp_df['previous_event'] == 'Exit') & (temp_df['event_type'] == 'Exit')) ,temp_df['businessDate'],temp_df['conviction_change_date']) # To handle cases like 11429626
     temp_df['conviction_change_date'] = np.where(((np.isnat(temp_df['conviction_change_date'])) & (temp_df['event_type'] == 'Exit')),temp_df['businessDate'],temp_df['conviction_change_date']) # To handle cases like 133512
-    temp_df['conviction_change_position_qty'] = np.where((np.isnan(temp_df['conviction_change_position_qty'])),0,temp_df['conviction_change_position_qty']) # To handle cases like 133512
+    
+    temp_df['days_to_change_conviction_till_exit'] = (temp_df['businessDate'] - temp_df['conviction_change_date']) / np.timedelta64(1, 'D')
+    temp_df['days_to_change_conviction_till_exit'] = np.where(temp_df['event_type'] == 'Exit',temp_df['days_to_change_conviction_till_exit'],np.NaN)
+    
+    temp_df['qty_when_conviction_changed'] = np.where((np.isnan(temp_df['qty_when_conviction_changed']) |((temp_df['previous_event'] == 'Exit') & (temp_df['event_type'] == 'Exit')) ),temp_df['previous_qty'],temp_df['qty_when_conviction_changed'])
+ #   temp_df['conviction_change_position_qty'] = np.where((np.isnan(temp_df['conviction_change_position_qty'])),0,temp_df['conviction_change_position_qty']) # To handle cases like 133512
     temp_df['days_to_change_conviction_till_exit'] = np.where((np.isnan(temp_df['days_to_change_conviction_till_exit'])),0,temp_df['days_to_change_conviction_till_exit']) # To handle cases like 133512
-    temp_df['days_to_change_conviction_till_exit'] = np.where(((temp_df['previous_event'] == 'Exit') & (temp_df['event_type'] == 'Exit')) ,0,temp_df['days_to_change_conviction_till_exit']) # to handle ecases like 8812687
+    
+    #temp_df['first_trim_qty'] = np.where((temp_df['days_to_change_conviction_till_exit'] == 0),-1,temp_df['first_trim_qty'])
+    temp_df['first_trim_pct'] = np.where((temp_df['days_to_change_conviction_till_exit'] == 0),-1,temp_df['first_trim_pct'])
+ #   temp_df['days_to_change_conviction_till_exit'] = np.where(((temp_df['previous_event'] == 'Exit') & (temp_df['event_type'] == 'Exit')) ,0,temp_df['days_to_change_conviction_till_exit']) # to handle ecases like 8812687
+    #temp_df['conviction_change_position_qty'] = np.where(((temp_df['previous_event'] == 'Exit') & (temp_df['event_type'] == 'Exit')) ,temp_df['change_in_quantity'],temp_df['conviction_change_position_qty']) # to handle ecases like 569663
+ #   temp_df['first_trim_qty'] = np.where(((temp_df['previous_event'] == 'Exit') & (temp_df['event_type'] == 'Exit')) ,0,temp_df['first_trim_qty']) # to handle ecases like 569663
     data.append(temp_df)
-     
+    #print_full(temp_df) 
     # temp_df  = temp_df.query('change_in_quantity  != 0')
     # temp_df['dummy_d'] = (temp_df.groupby(temp_df['change_in_quantity'].lt(0).cumsum()).cumcount())
     
