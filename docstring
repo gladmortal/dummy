@@ -1,0 +1,113 @@
+def split_data(sedol_split_data, ilite_instrument_id_to_alt_mapping):
+    """
+    Merges the 'sedol_split_data' and 'ilite_instrument_id_to_alt_mapping' data frames on the 'sedol' and 'value' columns,
+    respectively, after converting the values in these columns to uppercase. Filters the resulting data frame to include
+    only rows where the 'identifier' column of 'ilite_instrument_id_to_alt_mapping' equals 'sedol alt_cd*', and where
+    the 'date' column is greater than '2016-12-31'. Finally, adds a new column called 'iliteInstrumentId' to the data frame
+    that contains the values of the 'identifier' column for rows where the 'multiplier' column is null, and converts the
+    values in this new column to the 'Int64' data type.
+    
+    Parameters:
+    -----------
+    sedol_split_data : pandas.DataFrame
+        A data frame containing financial data with a column called 'sedol'.
+    ilite_instrument_id_to_alt_mapping : pandas.DataFrame
+        A data frame containing instrument identifier mappings with a column called 'value'.
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        A data frame that is the result of merging 'sedol_split_data' and 'ilite_instrument_id_to_alt_mapping', and then
+        performing the other operations described above.
+    """
+    # function body goes here
+
+
+def factset_pricing(pricing_data, ilite_instrument_id_to_alt_mapping):
+    """
+    Merges the 'pricing_data' and 'ilite_instrument_id_to_alt_mapping' data frames on the 'PRIMARY SEDOL' and 'value'
+    columns, respectively, after converting the values in the 'value' column to uppercase. Converts the 'securityPriceDate'
+    column of the resulting data frame to the datetime data type. 
+    
+    Parameters:
+    -----------
+    pricing_data : pandas.DataFrame
+        A data frame containing pricing data with a column called 'PRIMARY SEDOL' and a column called 'securityPriceDate'.
+    ilite_instrument_id_to_alt_mapping : pandas.DataFrame
+        A data frame containing instrument identifier mappings with a column called 'value'.
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        A data frame that is the result of merging 'pricing_data' and 'ilite_instrument_id_to_alt_mapping', and then
+        converting the 'securityPriceDate' column to the datetime data type.
+    """
+    # function body goes here
+
+
+
+
+def identify_exit_point(df_per_inst_acc):
+    """
+    Identifies the exit points for each instrument in the input data frame 'df_per_inst_acc'. First, sorts the data frame
+    by the 'businessDate' column. Then, groups the data frame by 'iliteInstrumentId' and adds a new column called 'counter'
+    that counts the number of times the 'positionTradedQuantity*' column equals zero within each group. Next, adds a new
+    column called 'div' that calculates the division of the 'counter' column by the previous row's 'counter' value within
+    each group. Computes the 'exit_count_overall' column by grouping the data frame by 'iliteInstrumentId' and summing the
+    number of times the 'div' column equals zero within each group. Adds a new column called 'event_type' that contains
+    the string 'Exit' for rows where the 'div' column equals zero, and NaN otherwise. Finally, computes the 'change_in_quantity'
+    column by taking the difference of the 'positionTradedQuantity*' column within each group, and returns the resulting data
+    frame sorted by 'iliteInstrumentId' and 'businessDate'.
+    
+    Parameters:
+    -----------
+    df_per_inst_acc : pandas.DataFrame
+        A data frame containing account-level transaction data for multiple instruments, with columns including
+        'businessDate', 'iliteInstrumentId', and 'positionTradedQuantity*'.
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        A data frame containing the input data frame 'df_per_inst_acc' with additional columns 'counter', 'div',
+        'exit_count_overall', 'event_type', and 'change_in_quantity', as described above, and sorted by 'iliteInstrumentId'
+        and 'businessDate'.
+    """
+    # function body goes here
+
+
+
+def trades_between_dates(trading_data, start_date, end_date, security):
+    """
+    Returns the number of unique trade dates for the given security in the given time period.
+
+    Parameters:
+    trading_data (DataFrame): The DataFrame containing the trading data.
+    start_date (str): The start date of the time period in 'YYYY-MM-DD' format.
+    end_date (str): The end date of the time period in 'YYYY-MM-DD' format.
+    security (str): The security identifier.
+
+    Returns:
+    int: The number of unique trade dates for the given security in the given time period.
+    """
+    return trading_data[
+        (
+            (trading_data["dateTimesent"] >= start_date)
+            & (trading_data["dateTimesent"] <= end_date)
+            & (trading_data["iliteInstrumentId"] == security)
+        )
+    ]["dateTimesent"].nunique()
+
+
+def hist_plot(df_bin, bucket_dict=None):
+    """
+    Plots a histogram of the trading and holding data based on the trimmed bucket values. 
+
+    Args:
+        df_bin (pandas.DataFrame): A pandas DataFrame containing the trimmed bucket values for trading and holding data.
+        bucket_dict (dict, optional): A dictionary to define the names of the trimmed bucket values. Defaults to None.
+            If not provided, the following default values are used:
+                {1: "<25%", 2: "25-50%", 3: "50-99%", 4: "Full Exit"}
+
+    Returns:
+        pandas.DataFrame: A pandas DataFrame containing the count of values for each trimmed bucket of trading and holding data.
+    """
