@@ -111,3 +111,23 @@ def hist_plot(df_bin, bucket_dict=None):
     Returns:
         pandas.DataFrame: A pandas DataFrame containing the count of values for each trimmed bucket of trading and holding data.
     """
+
+
+def save_graph_images(instruments, df_filtered, df_exit_conviction_to_exit_conviction, pricing_data, multiplier_data, ilite_mapping, exit_category, instruments_to_loop=instruments.iliteInstrumentId.tolist(), exit_ids=instruments.exitId.tolist()):
+    """
+    Save graph images for each instrument's exit conviction.
+
+    Args:
+        instruments (pandas.DataFrame): DataFrame containing instrument information.
+        df_filtered (pandas.DataFrame): DataFrame containing filtered data.
+        df_exit_conviction_to_exit_conviction (pandas.DataFrame): DataFrame containing exit conviction information.
+        pricing_data (pandas.DataFrame): DataFrame containing pricing data.
+        multiplier_data (pandas.DataFrame): DataFrame containing multiplier data.
+        ilite_mapping (dict): Dictionary containing mapping between iLite IDs and instrument names.
+        exit_category (str): The exit category to generate graphs for.
+        instruments_to_loop (list, optional): List of instrument IDs to loop over. Defaults to all instruments in `instruments` DataFrame.
+        exit_ids (list, optional): List of exit IDs to loop over. Defaults to all exit IDs in `instruments` DataFrame.
+
+    Returns:
+        None
+    """
