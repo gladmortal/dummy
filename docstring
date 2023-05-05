@@ -202,3 +202,17 @@ def save_graph_images(instruments, df_filtered, df_exit_conviction_to_exit_convi
     return ilite_instrument_id_to_alt_mapping
 
 
+
+
+
+def clean_sbor_duplicates_and_saving(df, ilite_mapping):
+    """
+    Clean SBOR data based on duplicates identified and Equity only mapping with ilite mapping file.
+    
+    Args:
+    - df: pandas DataFrame containing the SBOR data
+    - ilite_mapping: pandas DataFrame containing the ilite mapping data
+    
+    Returns:
+    - filtered_df: pandas DataFrame containing the cleaned and filtered SBOR data
+    """
