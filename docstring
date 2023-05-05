@@ -131,3 +131,44 @@ def save_graph_images(instruments, df_filtered, df_exit_conviction_to_exit_convi
     Returns:
         None
     """
+    
+    
+    
+    
+    
+    def stability_test(df, factor_list, lag=30):
+    """
+    Calculates the stability coefficient for a given set of factors over a specified lag period.
+
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        A DataFrame containing the data for the assets and factors.
+    factor_list : list
+        A list of factors for which the stability coefficient is to be calculated.
+    lag : int, optional (default=30)
+        The number of days of lag to use in the stability coefficient calculation.
+
+    Returns:
+    --------
+    pandas.DataFrame
+        A DataFrame containing the stability coefficient for each factor at each lag period.
+
+    Notes:
+    ------
+    The stability coefficient measures the similarity of a factor's behavior over a lag period.
+    A higher stability coefficient indicates a more stable factor over the lag period.
+
+    The input DataFrame must contain columns 'dates', 'asset', and at least one factor from the factor_list.
+
+    The returned DataFrame contains columns '*F_DATE', 'L DATE', 'factor', and 'score',
+    where '*F_DATE' is the start date of the lag period, 'L DATE' is the end date of the lag period,
+    'factor' is the factor for which the stability coefficient is calculated, and 'score' is the
+    stability coefficient.
+
+    This function requires the pandas, numpy, and tqdm packages.
+    """
+
+    # Function code here
+    ...
+
