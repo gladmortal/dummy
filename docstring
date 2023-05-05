@@ -171,4 +171,34 @@ def save_graph_images(instruments, df_filtered, df_exit_conviction_to_exit_convi
 
     # Function code here
     ...
+    
+    
+    
+    
+    def inst_mapping_decoded(ilite_mapping_df, exit_data_df):
+    """
+    Creates a mapping of instrument ids to alternative ids.
+
+    Parameters:
+    ilite_mapping_df (pd.DataFrame): Data frame containing instrument mappings.
+    exit_data_df (pd.DataFrame): Data frame containing exit counter data.
+
+    Returns:
+    pd.DataFrame: Data frame containing the mapping of instrument ids to alternative ids.
+    """
+    ilite_mapping_df["alternativeIds"] = ilite_mapping_df["alternativeIds"].astype("str")
+    
+    inst_mapping_data = []
+    for instrument in exit_data_df["iliteInstrumentId"].drop_duplicates().to_list():
+        alt_ids = ilite_mapping_df.query("id == @instrument")["alternativeIds"]
+        if not alt_ids.empty:
+            for k in json.loads(alt_ids.values[0]):
+                inst_mapping_data.append([k["name"], k["value"], instrument])
+    
+    ilite_instrument_id_to_alt_mapping = pd.DataFrame(
+        inst_mapping_data, columns=["identifier", "value", "iliteInstrumentId"]
+    )
+    
+    return ilite_instrument_id_to_alt_mapping
+
 
