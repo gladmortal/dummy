@@ -1,0 +1,7 @@
+# Section 4: Pie chart of stock price distribution
+st.header("Stock Price Distribution")
+plt.figure(figsize=(8, 6))
+filtered_data['close'].plot(kind='pie', autopct='%1.1f%%', shadow=True)
+plt.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
+plt.title("Stock Price Distribution")
+st.pyplot(plt)
