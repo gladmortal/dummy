@@ -1,0 +1,49 @@
+import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Set page title and layout
+st.set_page_config(page_title="Stock Analysis", layout="wide")
+
+# Set the title and description of the web app
+st.title("Stock Analysis")
+st.markdown("Select a stock from the dropdown menu to view the corresponding graphs.")
+
+# Create a dropdown menu for stock selection
+stocks = ['AAPL', 'GOOGL', 'MSFT', 'AMZN']  # Example list of stocks
+selected_stock = st.selectbox('Select a stock', stocks)
+
+# Load stock data (you can replace this with your own data source)
+data = pd.read_csv('stock_data.csv')  # Assuming you have a CSV file with stock data
+
+# Filter data for the selected stock
+filtered_data = data[data['symbol'] == selected_stock]
+
+# Section 1: Display basic stock information
+st.header("Stock Information")
+st.dataframe(filtered_data.head())
+
+# Section 2: Plot stock price over time
+st.header("Stock Price Over Time")
+plt.figure(figsize=(12, 6))
+sns.lineplot(x=filtered_data['date'], y=filtered_data['close'], color='purple')
+plt.xlabel("Date")
+plt.ylabel("Closing Price")
+plt.xticks(rotation=45)
+st.pyplot(plt)
+
+# Section 3: Plot stock volume over time
+st.header("Stock Volume Over Time")
+plt.figure(figsize=(12, 6))
+sns.lineplot(x=filtered_data['date'], y=filtered_data['volume'], color='green')
+plt.xlabel("Date")
+plt.ylabel("Volume")
+plt.xticks(rotation=45)
+st.pyplot(plt)
+
+# Section 4: Add any other desired sections and graphs based on the selected stock
+
+# Run the web app
+if __name__ == '__main__':
+    main()
