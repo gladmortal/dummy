@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Checkbox Form</title>
+</head>
+<body>
+    <form id="myForm">
+        <table>
+            <tr>
+                <th>isActive</th>
+                <th>Modification</th>
+            </tr>
+            <tr>
+                <td>Y</td>
+                <td><input type="checkbox" class="modification-checkbox"></td>
+            </tr>
+            <tr>
+                <td>N</td>
+                <td><input type="checkbox" class="modification-checkbox"></td>
+            </tr>
+            <!-- Add more rows as needed -->
+        </table>
+        <button type="button" onclick="submitForm()">Submit</button>
+    </form>
+
+    <script>
+        // Add an event listener to handle checkbox changes
+        document.querySelectorAll('.modification-checkbox').forEach(function(checkbox) {
+            checkbox.addEventListener('change', function() {
+                // Check if isActive is 'N' and the checkbox is checked
+                if (this.parentElement.previousElementSibling.textContent.trim() === 'N' && this.checked) {
+                    // Set the isActive value to 'Y' for this row
+                    this.parentElement.previousElementSibling.textContent = 'Y';
+                    alert('Y')
+                }
+                else{
+                  alert('N')
+                }
+            });
+        });
+
+        // Function to submit the form
+        function submitForm() {
+            document.getElementById('myForm').submit();
+        }
+    </script>
+</body>
+</html>
