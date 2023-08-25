@@ -1,0 +1,70 @@
+strategies:
+  - name: Strategy1
+    description: First portfolio strategy
+    account_code: ACC001
+    child_code: CHILD001
+    launch_date: 2023-01-15
+    benchmark:
+      name: S&P 500
+      code: SP500
+    structure: Long-Short
+    portfolio_manager: John Doe
+    portfolio_co_manager: Jane Smith
+    rebalance_threshold: 5%
+    trim_threshold: 2%
+
+    assets:
+      - asset_symbol: AAPL
+        weight: 0.4
+
+      - asset_symbol: MSFT
+        weight: 0.3
+
+      - asset_symbol: GOOGL
+        weight: 0.2
+
+      - asset_symbol: TSLA
+        weight: 0.1
+
+    rebalancing:
+      frequency: monthly
+      method: equal_weight
+
+    risk_tolerance: moderate
+
+    investment_horizon: long_term
+
+  - name: Strategy2
+    description: Second portfolio strategy
+    account_code: ACC002
+    child_code: CHILD002
+    launch_date: 2023-02-20
+    benchmark:
+      name: NASDAQ 100
+      code: NASDAQ
+    structure: Long
+    portfolio_manager: Alice Johnson
+    portfolio_co_manager: Bob Brown
+    rebalance_threshold: 4%
+    trim_threshold: 1%
+
+    assets:
+      - asset_symbol: AAPL
+        weight: 0.2
+
+      - asset_symbol: MSFT
+        weight: 0.2
+
+      - asset_symbol: GOOGL
+        weight: 0.3
+
+      - asset_symbol: TSLA
+        weight: 0.3
+
+    rebalancing:
+      frequency: quarterly
+      method: market_cap_weight
+
+    risk_tolerance: high
+
+    investment_horizon: short_term
