@@ -68,3 +68,31 @@ strategies:
     risk_tolerance: high
 
     investment_horizon: short_term
+
+
+
+
+
+import yaml
+
+# Read the YAML file into a dictionary
+with open('portfolio_strategies.yaml', 'r') as yaml_file:
+    data = yaml.load(yaml_file, Loader=yaml.FullLoader)
+
+# Access strategy data
+strategies = data['strategies']
+
+# Access the first strategy's name
+strategy1_name = strategies[0]['name']
+
+# Access the second strategy's description
+strategy2_description = strategies[1]['description']
+
+# Access other strategy details as needed
+# For example, to get the rebalancing frequency of the second strategy:
+strategy2_rebalancing_frequency = strategies[1]['rebalancing']['frequency']
+
+# Print the data for demonstration
+print("Strategy 1 Name:", strategy1_name)
+print("Strategy 2 Description:", strategy2_description)
+print("Strategy 2 Rebalancing Frequency:", strategy2_rebalancing_frequency)
