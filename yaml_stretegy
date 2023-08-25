@@ -96,3 +96,58 @@ strategy2_rebalancing_frequency = strategies[1]['rebalancing']['frequency']
 print("Strategy 1 Name:", strategy1_name)
 print("Strategy 2 Description:", strategy2_description)
 print("Strategy 2 Rebalancing Frequency:", strategy2_rebalancing_frequency)
+
+
+
+
+
+
+
+import yaml
+from dataclasses import dataclass
+from typing import List
+
+@dataclass
+class Benchmark:
+    name: str
+    code: str
+
+@dataclass
+class Asset:
+    asset_symbol: str
+    weight: float
+
+@dataclass
+class Rebalancing:
+    frequency: str
+    method: str
+
+@dataclass
+class PortfolioStrategy:
+    name: str
+    description: str
+    account_code: str
+    child_code: str
+    launch_date: str
+    benchmark: Benchmark
+    structure: str
+    portfolio_manager: str
+    portfolio_co_manager: str
+    rebalance_threshold: str
+    trim_threshold: str
+    assets: List[Asset]
+    rebalancing: Rebalancing
+    risk_tolerance: str
+    investment_horizon: str
+
+# Load the YAML data into a list of PortfolioStrategy objects
+with open('portfolio_strategies.yaml', 'r') as yaml_file:
+    data = yaml.load(yaml_file, Loader=yaml.FullLoader)
+    strategies_data = data['strategies']
+    portfolio_strategies = [PortfolioStrategy(**strategy) for strategy in strategies_data]
+
+# Accessing data from the first strategy
+strategy1 = portfolio_strategies[0]
+print("Strategy 1 Name:", strategy1.name)
+print("Strategy 1 Description:", strategy1.description)
+# Access other attributes as needed
