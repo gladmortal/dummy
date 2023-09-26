@@ -1,0 +1,59 @@
+from datetime import datetime
+import itertools
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Set a stylish Seaborn theme
+sns.set_style("whitegrid")
+
+# Create a color palette for episodes and sub-episodes
+episode_colors = itertools.cycle(['black', 'grey'])
+subepisode_colors = itertools.cycle(['red', 'green', 'blue'])
+
+# Get unique assets
+unique_assets = sbor_holding['Asset'].unique()
+
+# Create a 2-column grid for plotting
+num_columns = 2
+num_rows = len(unique_assets) // num_columns + (len(unique_assets) % num_columns > 0)
+fig, axes = plt.subplots(num_rows, num_columns, figsize=(14, 6 * num_rows))
+
+# Loop through unique assets and create plots for episodes and sub-episodes
+for i, asset in enumerate(unique_assets):
+    row = i // num_columns
+    col = i % num_columns
+    ax = axes[row, col]
+
+    data_df = sbor_holding.query('Asset == @asset').sort_values('businessDate').merge(
+        trading_data.query('Asset == @asset').sort_values('start_date'),
+        how='left',
+        left_on='businessDate',
+        right_on='start_date')[['businessDate', 'positionTradedQuantity']].sort_values('businessDate').set_index('businessDate').resample('1D').asfreq()
+
+    sns.lineplot(x=data_df.index, y='positionTradedQuantity', data=data_df, ax=ax, color=next(episode_colors), label='Episode')
+    
+    ax.set_title(f"{asset} - Episodes", fontsize=10)
+    ax.axhline(y=0, color='black', alpha=0.3)
+    
+    for _, row in episodes.query('Asset == @asset').iterrows():
+        if pd.isna(row['end_date']):
+            row['end_date'] = datetime.today()
+        ax.axvspan(row['start_date'], row['end_date'], color=next(episode_colors), alpha=0.2)
+
+    sns.lineplot(x=data_df.index, y='positionTradedQuantity', data=data_df, ax=ax, color=next(subepisode_colors), label='Sub-Episode')
+    
+    ax.set_title(f"{asset} - Sub-Episodes", fontsize=10)
+    
+    for _, row in sub_episodes.query('Asset == @asset').iterrows():
+        if pd.isna(row['end_date']):
+            row['end_date'] = datetime.today()
+        ax.axvspan(row['start_date'], row['end_date'], color=next(subepisode_colors), alpha=0.2)
+
+# Remove any empty subplots
+for i in range(len(unique_assets), num_rows * num_columns):
+    row = i // num_columns
+    col = i % num_columns
+    fig.delaxes(axes[row, col])
+
+plt.tight_layout()
+plt.show()
