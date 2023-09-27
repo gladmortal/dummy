@@ -1,0 +1,61 @@
+import dash
+import dash_core_components as dcc
+import dash_html_components as html
+from dash.dependencies import Input, Output
+import pandas as pd
+import plotly.express as px
+
+# Sample data
+# Replace this with your actual data
+data = {
+    'Asset': ['Asset1', 'Asset2', 'Asset3'],
+    'Comment': ['Comment1', 'Comment2', 'Comment3'],
+}
+
+app = dash.Dash(__name__)
+
+app.layout = html.Div([
+    html.H1("Asset Analysis Dashboard"),
+    
+    # Dropdown to select an asset
+    dcc.Dropdown(
+        id='asset-dropdown',
+        options=[
+            {'label': asset, 'value': asset} for asset in data['Asset']
+        ],
+        value=data['Asset'][0]
+    ),
+    
+    # Graph displaying data
+    dcc.Graph(id='asset-graph'),
+    
+    # Comments and feedback section
+    html.Div([
+        html.H2("Comments and Feedback"),
+        dcc.Textarea(id='comment-input', placeholder='Enter your comment...'),
+        html.Button('Submit', id='comment-button'),
+        html.Div(id='comment-output')
+    ])
+])
+
+@app.callback(
+    Output('asset-graph', 'figure'),
+    Output('comment-output', 'children'),
+    Input('asset-dropdown', 'value'),
+    Input('comment-button', 'n_clicks'),
+    State('comment-input', 'value')
+)
+def update_graph(selected_asset, n_clicks, comment):
+    # Generate a simple graph (replace this with your actual graphing logic)
+    fig = px.scatter(x=[1, 2, 3], y=[4, 5, 6], labels={'x': 'X-axis', 'y': 'Y-axis'}, title=f"Asset: {selected_asset}")
+    
+    # Save the comment and feedback (you can store this in a database)
+    if n_clicks:
+        data['Asset'].append(selected_asset)
+        data['Comment'].append(comment)
+        return fig, f"Comment submitted: {comment}"
+    
+    return fig, ""
+
+if __name__ == '__main__':
+    app.run_server(debug=True)
