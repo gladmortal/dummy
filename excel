@@ -1,0 +1,16 @@
+Sub HideColumnsBasedOnDropdown()
+    Dim State As String
+    Dim Col As Long
+    
+    State = Range("A1").Value ' Assumes the dropdown is in cell A1
+    
+    ' Unhide all columns
+    Columns.Hidden = False
+    
+    ' Loop through each column starting from the 2nd column (B)
+    For Col = 2 To 51 ' Assuming your data starts from column B to AZ (50 columns)
+        If Cells(1, Col).Value <> State Then
+            Columns(Col).Hidden = True ' Hide the column if it doesn't match the selected state
+        End If
+    Next Col
+End Sub
