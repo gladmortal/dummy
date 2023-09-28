@@ -14,3 +14,9 @@ Sub HideColumnsBasedOnDropdown()
         End If
     Next Col
 End Sub
+
+Private Sub Worksheet_Change(ByVal Target As Range)
+    If Target.Address = "$A$1" Then ' Change this address to match your dropdown cell
+        HideColumnsBasedOnDropdown
+    End If
+End Sub
