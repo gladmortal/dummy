@@ -1,0 +1,31 @@
+@app.callback(
+    Output('feedback-output-', 'children'),
+    Input({'type': 'submit-feedback', 'index': ALL}, 'n_clicks'),
+    State({'type': 'feedback', 'index': ALL}, "value"),
+)
+def submit_stock_feedback(n_clicks_list, feedback_text_list):
+    ctx = dash.callback_context
+
+    if not ctx.triggered:
+        return dash.no_update
+
+    triggered_id = ctx.triggered_id
+    if triggered_id is None:
+        return dash.no_update
+
+    # Extract the asset index from the triggered ID
+    asset_index = int(triggered_id['index'])
+
+    # Use asset_index to access the corresponding feedback text and n_clicks
+    n_clicks = n_clicks_list[asset_index]
+    feedback_text = feedback_text_list[asset_index]
+
+    print(f"Feedback for asset {asset_index}: {feedback_text}")
+
+    if n_clicks:
+        # Here, you should implement code to store feedback specific to each stock
+        # For simplicity, we just display the submitted stock-specific feedback
+        return html.Div([
+            html.H5('Feedback Submitted:', className='mb-2'),
+            html.P(feedback_text, className='alert alert-success')
+        ])
