@@ -1,0 +1,64 @@
+import sqlite3
+
+# Connect to SQLite database (or create it if it doesn't exist)
+conn = sqlite3.connect('feedback.db')
+
+# Create a cursor object to execute SQL queries
+cursor = conn.cursor()
+
+# Create a table to store feedback data with columns: id, asset, feedback_text, user, and submission_date
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        asset TEXT,
+        feedback_text TEXT,
+        user TEXT,
+        submission_date TEXT
+    )
+''')
+
+# Commit changes and close the connection
+conn.commit()
+conn.close()
+
+
+
+
+
+
+import sqlite3
+from datetime import datetime
+import getpass  # This module allows you to capture the username
+
+# Get the current system user (username)
+current_user = getpass.getuser()
+
+@app.callback(
+    Output('feedback-output', 'children'),
+    Input('submit-button', 'n_clicks'),
+    State('feedback-textarea', 'value'),
+    State('asset-dropdown', 'value')
+)
+def submit_stock_feedback(n_clicks, feedback_text, selected_asset):
+    if n_clicks:
+        # Get the current system date and time
+        current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Connect to the SQLite database
+        conn = sqlite3.connect('feedback.db')
+        cursor = conn.cursor()
+
+        # Insert feedback data along with user and system date into the database
+        cursor.execute('INSERT INTO feedback (asset, feedback_text, submission_date, user) VALUES (?, ?, ?, ?)',
+                       (selected_asset, feedback_text, current_datetime, current_user))
+
+        # Commit changes and close the connection
+        conn.commit()
+        conn.close()
+
+        # Display success message
+        return html.Div([
+            html.H5(f'Feedback for {selected_asset} has been submitted and stored in the database on {current_datetime} '
+                    f'by user: {current_user}.'),
+            html.P(feedback_text, className='alert alert-success')
+        ])
