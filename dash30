@@ -1,0 +1,83 @@
+import dash
+from dash import dcc, html
+from dash.dependencies import Input, Output
+import pandas as pd
+import random
+import dash_table
+
+app = dash.Dash(__name__)
+
+# Sample stock data (you should replace this with your actual data)
+stocks = pd.DataFrame({
+    'Asset Name': ['AAPL', 'GOOGL', 'MSFT'],
+    'Dividend Announced': [random.choice([True, False]) for _ in range(3)],
+    'Split Announced': [random.choice([True, False]) for _ in range(3)]
+})
+
+app.layout = html.Div([
+    # Include Bootstrap CSS via CDN
+    html.Link(
+        rel='stylesheet',
+        href='https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css'
+    ),
+    
+    html.Nav(
+        html.H1("Stock Validation Dashboard", className='display-4 mx-auto mt-3 mb-4'),
+        className='navbar navbar-expand-lg navbar-light bg-light'
+    ),
+    
+    html.Div([
+        html.Div([
+            dcc.Dropdown(
+                id='asset-dropdown',
+                options=[{'label': asset, 'value': asset} for asset in stocks['Asset Name']],
+                value=stocks['Asset Name'][0],
+                className='form-control',
+                style={'width': '300px'}  # Set the width of the dropdown
+            ),
+            
+            dcc.Dropdown(
+                id='filter-dropdown',
+                options=[
+                    {'label': 'Dividend Announced', 'value': 'dividend'},
+                    {'label': 'Split Announced', 'value': 'split'}
+                ],
+                multi=True,
+                className='form-control',
+                style={'width': '300px'}  # Set the width of the filter dropdown
+            ),
+            
+            dcc.Graph(id='stock-graph', className='mx-auto', style={'max-width': '800px'}),
+        ], className='col-md-6'),  # Half of the row width
+        
+        html.Div([
+            # Feedback section for each stock
+            html.Div(id='stock-feedback-section', className='mt-3', style={'max-width': '800px'}),
+            
+            # Table to display stock data
+            dash_table.DataTable(
+                id='stock-table',
+                columns=[{'name': col, 'id': col} for col in stocks.columns],
+                data=stocks.to_dict('records'),
+                style_table={'overflowX': 'auto'},  # Enable horizontal scrolling
+                style_cell={'textAlign': 'left'},
+                style_header={'backgroundColor': 'lightgrey', 'fontWeight': 'bold'}
+            ),
+        ], className='col-md-6'),  # Half of the row width
+    ], className='row mb-3 mx-auto', style={'max-width': '1200px'}),  # Full row width with a maximum width of 1200px
+    
+    html.Div([
+        dcc.Textarea(
+            id='feedback',
+            placeholder="Provide feedback here...",
+            className='form-control',
+            style={'width': '100%'}  # Set the width of the textarea to 100%
+        ),
+        html.Button('Submit Feedback', id='submit-feedback', className='btn btn-primary mt-2'),
+    ], className='mx-auto', style={'max-width': '800px'}),
+])
+
+# ... Rest of the code remains the same
+
+if __name__ == '__main__':
+    app.run_server(debug=True)
