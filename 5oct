@@ -1,0 +1,7 @@
+def find_episode_id(row):
+    mask = (df2['asset'] == row['Asset']) & (df2['start_date'] <= row['businessDate']) & ((df2['end_date'].isnull()) | (df2['end_date'] >= row['businessDate']))
+    episode_ids = df2.loc[mask, 'episode_id']
+    return episode_ids.iloc[0] if not episode_ids.empty else None
+
+# Apply the function to create the 'episode_id' column in df1
+df1['episode_id'] = df1.apply(find_episode_id, axis=1)
