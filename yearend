@@ -1,0 +1,36 @@
+**Business Results:**
+
+1. **Enhanced Deal Sourcing Dashboard:**
+   - Implemented multiple new signals for the deal sourcing dashboard, such as Capterra, LinkedIn, and similarweb.
+   - Collaborated with Tech to productionize existing signals, significantly improving the dashboard's ability to identify promising early-stage companies for investments.
+   - The dashboard now serves as one of the primary source for shortlisting companies for billion-dollar investment pool.
+
+2. **Chase data for Real Estate:**
+   - Extracted valuable insights from Chase data, enhancing real estate investment decisions, including trends in weekend dining and grocery spending within specific locations and zip codes.
+   - Enriched the dataset with constant panel and other transformations, enabling comprehensive statistical and time-series analyses.
+   - Shared analysis on promising zip codes in the Pittsburgh area, indicating potential for further growth.
+
+3. **Energy Pricing Delivery:**
+   - Ensured consistent and high-quality delivery of energy pricing data to Fred Barasi (senior Analyst covering UK energy companies), supporting well-informed decision-making in analyzing UK energy companies and their financial health.
+
+**Clients/Customers/Stakeholders:**
+
+1. **PM Moneyball:**
+   - Led the development of the episode framework, a core component of PM Moneyball, facilitating strategic decision-making for portfolio managers.
+   - Conducted insightful exit analysis for the long-short fund, which originate the  concept of decision timelines and episode/sub-episode analysis. This approach revolutionises understanding of investment strategies by dissecting the decision-making process into distinct episodes and sub-episodes. By meticulously studying these periods, we will gain profound insights into the evolution of investment choices over time and support in  optimising portfolio performance.
+- Collaborated closely with the trading team in India to delve into trade data and build system to associate Trades with holdings first time in Asset Management, aiming to extract deeper insights and understand the underlying intentions behind changes in positions. bring the concept of “Trade Intention” This collaborative effort bridged the gap between raw trading data and actionable insights.
+   - Aided in attribution analysis by conducting comprehensive assessments utilizing regression models and considering various multicollinearity factors
+   - Ensured data accuracy and consumability by collaborating with various teams for data delivery and validation.
+   - Positive feedback received from portfolio managers, emphasizing the strategic value of the analysis.
+   - Developed a validation dashboard in DASH to facilitate rapid development of episode framework.
+
+
+**Teamwork/Leadership:**
+
+- Led a team of 4 in global hackathon 2023 to analyse impact of crowdsourcing data on stock price movement, the idea was well received from jury.
+- Led presentations and demos for visiting leadership in India, focusing on various aspects of data science.
+   - Recognised by Mary Erdos for contributions to multiple data science projects throughout the year.
+   - Launched the Coffee Chat program for AM India, fostering connections among 1600 AM India employees.
+   - contributed to BRG and Goodworks events with volunteering event at Old Age home.
+   - Played a vital role in talent acquisition for data science and quantitative roles both in India and globally.
+- Assisted team members in India with technical needs, including any data extraction, Python, and automation related work.
