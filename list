@@ -1,0 +1,12 @@
+nifty_50_ric_codes = [
+    "RELI.NS", "TCS.NS", "HDBK.NS", "INFY.NS", "HLL.NS",
+    "ICBK.NS", "SBI.NS", "BRTI.NS", "KTKM.NS", "HDFC.NS",
+    "BJFN.NS", "LART.NS", "ITC.NS", "AXBK.NS", "ASPN.NS",
+    "MRTI.NS", "WIPR.NS", "ULTC.NS", "NEST.NS", "SUN.NS",
+    "TITN.NS", "MAHM.NS", "BJFS.NS", "DIVI.NS", "NTPC.NS",
+    "PGRD.NS", "TEML.NS", "HCLT.NS", "JSW.NS", "TISC.NS",
+    "ONGC.NS", "COAL.NS", "GRAS.NS", "SBIL.NS", "CIPL.NS",
+    "APSE.NS", "EICH.NS", "BAJA.NS", "BRIT.NS", "HROM.NS",
+    "INBK.NS", "UPLL.NS", "SHCM.NS", "TAMO.NS", "HDFL.NS",
+    "REDY.NS", "BPCL.NS", "IOC.NS", "HALC.NS", "SBIC.NS"
+]
