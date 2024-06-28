@@ -1,0 +1,57 @@
+import pandas as pd
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import KMeans
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+
+# Step 1: Data Preparation
+data = {
+    'news': [
+        "Company A reports record profits",
+        "Company B faces regulatory challenges",
+        "New product launch by Company C",
+        "Company D experiences significant growth",
+        "Merger talks between Company E and F",
+        "Company G faces legal issues",
+        "Company H announces new CEO",
+        "Positive quarterly results for Company I"
+    ],
+    'impact': [5.0, -3.0, 4.0, 6.0, 7.0, -2.0, 3.0, 4.5]
+}
+
+df = pd.DataFrame(data)
+
+# Step 2: Feature Extraction
+vectorizer = TfidfVectorizer(stop_words='english')
+X = vectorizer.fit_transform(df['news'])
+
+# Step 3: Clustering
+kmeans = KMeans(n_clusters=3, random_state=42)
+df['cluster'] = kmeans.fit_predict(X)
+
+# Step 4: Supervised Learning Model
+# Adding cluster labels as an additional feature
+X_with_clusters = np.hstack((X.toarray(), df['cluster'].values.reshape(-1, 1)))
+
+X_train, X_test, y_train, y_test = train_test_split(X_with_clusters, df['impact'], test_size=0.2, random_state=42)
+
+model = RandomForestRegressor(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+y_pred = model.predict(X_test)
+
+mse = mean_squared_error(y_test, y_pred)
+print(f"Mean Squared Error: {mse}")
+
+def predict_impact(new_news):
+    X_new = vectorizer.transform([new_news])
+    cluster = kmeans.predict(X_new)
+    X_new_with_cluster = np.hstack((X_new.toarray(), cluster.reshape(-1, 1)))
+    impact_pred = model.predict(X_new_with_cluster)
+    return impact_pred[0], cluster[0]
+
+new_news = "Company J announces major expansion"
+predicted_impact, cluster = predict_impact(new_news)
+print(f"Predicted Impact: {predicted_impact}, Cluster: {cluster}")
