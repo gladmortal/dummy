@@ -1,0 +1,41 @@
+# Assuming the historical prices dataframe is provided as 'historical_df'
+
+# Function to create JSON for one row, including historical prices from another dataframe
+def create_news_json(row, historical_prices_df):
+    # Filter historical prices for the relevant stock symbol and convert to the required format
+    historical_prices = historical_prices_df[historical_prices_df['SYM'] == row['ricCode']]
+    historical_prices_list = [
+        {
+            "date": pd.to_datetime(historical_prices.iloc[i]['DATE']).strftime('%Y-%m-%dT%H:%M:%S'),
+            "price": historical_prices.iloc[i]['CLOSE']
+        }
+        for i in range(min(5, len(historical_prices)))  # Assuming we need the last 5 historical prices
+    ]
+    
+    return {
+        "title": row["headline"],
+        "time": row["datetime"],  # Adjust as needed for actual datetime
+        "details": row["storyText"],
+        "stocks": {
+            "name": row["ricCode"],
+            "sentiment": row["sentimentTopic_enc"],
+            "portfolioImpact": None,  # Assuming this is not provided in the table
+            "prices": {
+                "historical": historical_prices_list,
+                "predictions": [
+                    {"date": "2024-06-29T10:00:00", "price": row["T+1D"]},
+                    {"date": "2024-06-30T10:00:00", "price": row["T+2D"]},
+                    {"date": "2024-07-01T10:00:00", "price": row["T+3D"]}
+                ]
+            }
+        }
+    }
+
+# Applying the function to each row to create a list of news JSONs
+news_list = [create_news_json(row, historical_df) for _, row in df.iterrows()]
+
+# Convert to JSON string if needed
+news_list_json = json.dumps(news_list, indent=4)
+
+# Display the JSON string
+print(news_list_json)
