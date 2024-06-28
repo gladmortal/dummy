@@ -1,12 +1,37 @@
-nifty_50_ric_codes = [
-    "RELI.NS", "TCS.NS", "HDBK.NS", "INFY.NS", "HLL.NS",
-    "ICBK.NS", "SBI.NS", "BRTI.NS", "KTKM.NS", "HDFC.NS",
-    "BJFN.NS", "LART.NS", "ITC.NS", "AXBK.NS", "ASPN.NS",
-    "MRTI.NS", "WIPR.NS", "ULTC.NS", "NEST.NS", "SUN.NS",
-    "TITN.NS", "MAHM.NS", "BJFS.NS", "DIVI.NS", "NTPC.NS",
-    "PGRD.NS", "TEML.NS", "HCLT.NS", "JSW.NS", "TISC.NS",
-    "ONGC.NS", "COAL.NS", "GRAS.NS", "SBIL.NS", "CIPL.NS",
-    "APSE.NS", "EICH.NS", "BAJA.NS", "BRIT.NS", "HROM.NS",
-    "INBK.NS", "UPLL.NS", "SHCM.NS", "TAMO.NS", "HDFL.NS",
-    "REDY.NS", "BPCL.NS", "IOC.NS", "HALC.NS", "SBIC.NS"
-]
+import json
+
+# Function to create JSON for one row
+def create_news_json(row):
+    return {
+        "title": row["headline"],
+        "time": row["datetime"],  # Adjust as needed for actual datetime
+        "details": row["storyText"],
+        "stocks": {
+            "name": row["ricCode"],
+            "sentiment": row["sentimentTopic_enc"],
+            "portfolioImpact": None,  # Assuming this is not provided in the table
+            "prices": {
+                "historical": [
+                    {"date": "2024-06-28T09:30:00", "price": row["T+2m"]},
+                    {"date": "2024-06-28T09:45:00", "price": row["T+5m"]},
+                    {"date": "2024-06-28T10:00:00", "price": row["T+30m"]},
+                    {"date": "2024-06-28T11:00:00", "price": row["T+1hr"]},
+                    {"date": "2024-06-28T12:00:00", "price": row["T+3hr"]}
+                ],
+                "predictions": [
+                    {"date": "2024-06-29T10:00:00", "price": row["T+1D"]},
+                    {"date": "2024-06-30T10:00:00", "price": row["T+2D"]},
+                    {"date": "2024-07-01T10:00:00", "price": row["T+3D"]}
+                ]
+            }
+        }
+    }
+
+# Applying the function to each row to create a list of news JSONs
+news_list = [create_news_json(row) for _, row in df.iterrows()]
+
+# Convert to JSON string if needed
+news_list_json = json.dumps(news_list, indent=4)
+
+# Display the JSON string
+news_list_json
