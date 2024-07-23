@@ -1,0 +1,96 @@
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+from annoy import AnnoyIndex
+import plotly.express as px
+from sklearn.manifold import TSNE
+
+# Simulated DataFrame (replace this with actual data loading)
+data = {
+    'asset': [895, 895, 895, 895, 895, 13389730, 13466831, 13471190, 13471190, 13471190],
+    'date': ['2013-01-02', '2013-01-03', '2013-01-04', '2013-01-07', '2013-01-08', 
+             '2024-05-31', '2024-04-29', '2024-05-01', '2024-05-02', '2024-05-03'],
+    'account_code': [85503, 85503, 85503, 85503, 85503, 85503, 85503, 85503, 85503, 85503],
+    'episode_id': [
+        'E-85503-895-20130101000000', 'E-85503-895-20130101000000', 
+        'E-85503-895-20130101000000', 'E-85503-895-20130101000000', 
+        'E-85503-895-20130101000000', 'E-85503-13389730-20240201000000', 
+        'E-85503-13466831-20240426000000', 'E-85503-13471190-20240430000000', 
+        'E-85503-13471190-20240430000000', 'E-85503-13471190-20240430000000'
+    ],
+    'major_type': ['POSITIVE', 'POSITIVE', 'POSITIVE', 'POSITIVE', 'POSITIVE', 
+                   'POSITIVE', 'POSITIVE', 'NEGATIVE', 'NEGATIVE', 'NEGATIVE'],
+    'minor_type': ['LONG', 'LONG', 'LONG', 'LONG', 'LONG', 
+                   'LONG', 'LONG', 'SHORT', 'SHORT', 'SHORT'],
+    'cumulative_net_return': [0.014933, 0.008189, 0.005780, 0.021676, 0.039981, 
+                              -0.039022, 0.006606, -0.015542, 0.054716, 0.003619],
+    'active_weight': [0.020660, 0.020639, 0.020578, 0.020794, 0.021100, 
+                      0.010778, 0.000000, -0.000746, -0.000695, -0.000733],
+    'price_close_local': [1.168353, 1.160590, 1.157818, 1.176116, 1.197188, 
+                          28.750000, 16.458000, 238.500000, 222.000000, 234.000000],
+    'total_return_local': [0.014933, -0.006645, -0.002389, 0.015805, 0.017916, 
+                           0.010900, 0.006606, 0.015542, -0.069182, 0.054054],
+    'drawdown': [0.000000, -0.006744, -0.009152, 0.000000, 0.000000, 
+                 -0.091418, 0.000000, 0.000000, 0.000000, -0.051096]
+}
+
+df = pd.DataFrame(data)
+
+# Select the features to be used for similarity search
+features = df[['cumulative_net_return', 'active_weight', 'price_close_local', 'total_return_local', 'drawdown']]
+
+# Scale the features
+scaler = StandardScaler()
+scaled_features = scaler.fit_transform(features)
+
+# Define the number of dimensions based on scaled features
+feature_dimension = scaled_features.shape[1]
+annoy_index = AnnoyIndex(feature_dimension, 'euclidean')
+
+# Add items to the ANNoy index
+for i, feature_vector in enumerate(scaled_features):
+    annoy_index.add_item(i, feature_vector)
+
+# Build the index with 10 trees
+annoy_index.build(10)
+
+# Example new data point (raw features)
+new_data_point_raw = [[0.03, 0.022, 1.250, 0.020, 0.000]]
+
+# Scale the new data point using the same scaler
+new_data_point_scaled = scaler.transform(new_data_point_raw)
+
+# Get the 5 nearest neighbors
+nearest_neighbors = annoy_index.get_nns_by_vector(new_data_point_scaled[0], 5)
+print("Nearest Neighbors:", nearest_neighbors)
+
+# Fetch the nearest neighbor rows from the original DataFrame
+similar_events = df.iloc[nearest_neighbors]
+print(similar_events)
+
+# Apply t-SNE to reduce the dimensions to 2D for visualization
+tsne = TSNE(n_components=2, random_state=42)
+tsne_features = tsne.fit_transform(scaled_features)
+
+# Apply t-SNE to the new data point
+new_data_point_tsne = tsne.fit_transform(np.vstack([scaled_features, new_data_point_scaled]))[-1, :]
+
+# Ensure nearest_neighbors are integers
+nearest_neighbors = [int(index) for index in nearest_neighbors]
+
+# Create a DataFrame for Plotly
+tsne_df = pd.DataFrame(tsne_features, columns=['TSNE1', 'TSNE2'])
+tsne_df['label'] = 'All Data Points'
+tsne_df.loc[nearest_neighbors, 'label'] = 'Nearest Neighbors'
+new_data_point_df = pd.DataFrame([new_data_point_tsne], columns=['TSNE1', 'TSNE2'])
+new_data_point_df['label'] = 'New Data Point'
+
+# Combine the data
+plot_df = pd.concat([tsne_df, new_data_point_df], ignore_index=True)
+
+# Plot using Plotly
+fig = px.scatter(plot_df, x='TSNE1', y='TSNE2', color='label', 
+                 title='Visualization of Nearest Neighbors using t-SNE',
+                 symbol='label')
+
+# Show plot
+fig.show()
