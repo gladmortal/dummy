@@ -1,0 +1,24 @@
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+
+# Apply PCA to reduce the dimensions to 2D for visualization
+pca = PCA(n_components=2)
+pca_features = pca.fit_transform(scaled_features)
+
+# Apply PCA to the new data point
+new_data_point_pca = pca.transform(new_data_point_scaled)
+
+# Plot all data points
+plt.scatter(pca_features[:, 0], pca_features[:, 1], label='All Data Points')
+
+# Highlight the nearest neighbors
+plt.scatter(pca_features[nearest_neighbors, 0], pca_features[nearest_neighbors, 1], color='red', label='Nearest Neighbors')
+
+# Plot the new data point
+plt.scatter(new_data_point_pca[:, 0], new_data_point_pca[:, 1], color='green', label='New Data Point', marker='x')
+
+plt.xlabel('PCA Component 1')
+plt.ylabel('PCA Component 2')
+plt.legend()
+plt.title('Visualization of Nearest Neighbors')
+plt.show()
