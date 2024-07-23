@@ -1,0 +1,55 @@
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+from annoy import AnnoyIndex
+
+# Simulated DataFrame (replace this with actual data loading)
+data = {
+    'asset': [895, 895, 895, 895, 895],
+    'date': ['2013-01-02', '2013-01-03', '2013-01-04', '2013-01-07', '2013-01-08'],
+    'account_code': [85503, 85503, 85503, 85503, 85503],
+    'episode_id': [
+        'E-85503-895-20130101000000',
+        'E-85503-895-20130101000000',
+        'E-85503-895-20130101000000',
+        'E-85503-895-20130101000000',
+        'E-85503-895-20130101000000'
+    ],
+    'major_type': ['POSITIVE', 'POSITIVE', 'POSITIVE', 'POSITIVE', 'POSITIVE'],
+    'minor_type': ['LONG', 'LONG', 'LONG', 'LONG', 'LONG'],
+    'cumulative_net_return': [0.014933, 0.008189, 0.005780, 0.021676, 0.039981],
+    'active_weight': [0.020660, 0.020639, 0.020578, 0.020794, 0.021100],
+    'price_close_local': [1.168353, 1.160590, 1.157818, 1.176116, 1.197188],
+    'total_return_local': [0.014933, -0.006645, -0.002389, 0.015805, 0.017916],
+    'drawdown': [0.000000, -0.006744, -0.009152, 0.000000, 0.000000]
+}
+
+df = pd.DataFrame(data)
+
+# Select the features to be used for similarity search
+features = df[['cumulative_net_return', 'active_weight', 'price_close_local', 'total_return_local', 'drawdown']]
+
+# Scale the features
+scaler = StandardScaler()
+scaled_features = scaler.fit_transform(features)
+
+# Define the number of dimensions based on scaled features
+feature_dimension = scaled_features.shape[1]
+annoy_index = AnnoyIndex(feature_dimension, 'euclidean')
+
+# Add items to the ANNoy index
+for i, feature_vector in enumerate(scaled_features):
+    annoy_index.add_item(i, feature_vector)
+
+# Build the index with 10 trees
+annoy_index.build(10)
+
+# Example new data point (scaled using the same scaler)
+new_data_point = scaler.transform([[0.02, 0.021, 1.200, 0.018, 0.000]])
+
+# Get the 5 nearest neighbors
+nearest_neighbors = annoy_index.get_nns_by_vector(new_data_point[0], 5)
+print("Nearest Neighbors:", nearest_neighbors)
+
+# Fetch the nearest neighbor rows from the original DataFrame
+similar_events = df.iloc[nearest_neighbors]
+print(similar_events)
