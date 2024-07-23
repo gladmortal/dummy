@@ -1,0 +1,30 @@
+import plotly.express as px
+from sklearn.decomposition import PCA
+
+# Apply PCA to reduce the dimensions to 2D for visualization
+pca = PCA(n_components=2)
+pca_features = pca.fit_transform(scaled_features)
+
+# Apply PCA to the new data point
+new_data_point_pca = pca.transform(new_data_point_scaled)
+
+# Ensure nearest_neighbors are integers
+nearest_neighbors = [int(index) for index in nearest_neighbors]
+
+# Create a DataFrame for Plotly
+pca_df = pd.DataFrame(pca_features, columns=['PCA1', 'PCA2'])
+pca_df['label'] = 'All Data Points'
+pca_df.loc[nearest_neighbors, 'label'] = 'Nearest Neighbors'
+new_data_point_df = pd.DataFrame(new_data_point_pca, columns=['PCA1', 'PCA2'])
+new_data_point_df['label'] = 'New Data Point'
+
+# Combine the data
+plot_df = pd.concat([pca_df, new_data_point_df])
+
+# Plot using Plotly
+fig = px.scatter(plot_df, x='PCA1', y='PCA2', color='label', 
+                 title='Visualization of Nearest Neighbors',
+                 symbol='label')
+
+# Show plot
+fig.show()
