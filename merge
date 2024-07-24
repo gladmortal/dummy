@@ -1,0 +1,36 @@
+import pandas as pd
+import numpy as np
+
+# Assuming df and df_trade are your two dataframes
+
+# Convert date columns to datetime if they're not already
+df['date'] = pd.to_datetime(df['date'])
+df_trade['start_date'] = pd.to_datetime(df_trade['start_date'])
+
+# Merge the dataframes
+merged = pd.merge_asof(df.sort_values('date'), 
+                       df_trade.sort_values('start_date'), 
+                       left_on='date', 
+                       right_on='start_trade', 
+                       by='asset', 
+                       direction='forward')
+
+# Calculate days between df date and trade date
+merged['days_to_trade'] = (merged['start_date'] - merged['date']).dt.days
+
+# Filter to include only trades on or after df date
+merged = merged[merged['days_to_trade'] >= 0]
+
+# Keep only the earliest trade for each df row
+result = merged.sort_values('days_to_trade').groupby(['asset', 'date']).first().reset_index()
+
+# Select the columns you want to keep
+columns_to_keep = ['asset', 'date', 'account_code', 'episode_id', 'major_type', 'minor_type', 
+                   'cumulative_net_return', 'active_weight', 'price_close_local', 'total_return_local', 
+                   'drawdown', 'drawdown_days', 'days_to_trade', 'quantity_shares_executed', 
+                   'quantity_shares_ordered', 'side']
+
+result = result[columns_to_keep]
+
+# Display the result
+print(result)
