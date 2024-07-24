@@ -1,0 +1,53 @@
+import pandas as pd
+import plotly.graph_objects as go
+from datetime import timedelta
+
+# Assuming df and similar_events are your two dataframes
+# Convert date columns to datetime if they're not already
+df['date'] = pd.to_datetime(df['date'])
+similar_events['date'] = pd.to_datetime(similar_events['date'])
+
+# Function to get next 30 days of data for a given asset and start date
+def get_next_30_days(asset, start_date):
+    end_date = start_date + timedelta(days=30)
+    mask = (df['asset'] == asset) & (df['date'] > start_date) & (df['date'] <= end_date)
+    return df[mask]
+
+# Create a Plotly figure
+fig = go.Figure()
+
+# Color mapping for minor_type
+color_map = {'LONG': 'green', 'SHORT': 'red'}
+
+# Iterate through each row in similar_events
+for _, event in similar_events.iterrows():
+    asset = event['asset']
+    start_date = event['date']
+    
+    # Get next 30 days of data
+    next_30_days = get_next_30_days(asset, start_date)
+    
+    if not next_30_days.empty:
+        # Get the minor_type from df
+        minor_type = next_30_days.iloc[0]['minor_type']
+        
+        # Add trace to the figure
+        fig.add_trace(go.Scatter(
+            x=next_30_days['date'],
+            y=next_30_days['total_return_local'],
+            mode='lines',
+            name=f"Asset: {asset}, Date: {start_date.date()}",
+            line=dict(color=color_map.get(minor_type, 'blue'))
+        ))
+
+# Update layout
+fig.update_layout(
+    title='Total Return Local for Next 30 Days',
+    xaxis_title='Date',
+    yaxis_title='Total Return Local',
+    legend_title='Events',
+    hovermode='x unified'
+)
+
+# Show the plot
+fig.show()
