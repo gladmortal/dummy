@@ -1,0 +1,87 @@
+import pandas as pd
+import plotly.graph_objects as go
+from datetime import timedelta
+import numpy as np
+
+# Assuming df and similar_events are your two dataframes
+# Convert date columns to datetime if they're not already
+df['date'] = pd.to_datetime(df['date'])
+similar_events['date'] = pd.to_datetime(similar_events['date'])
+
+# Function to get next 30 days of data for a given asset and start date
+def get_next_30_days(asset, start_date):
+    end_date = start_date + timedelta(days=30)
+    mask = (df['asset'] == asset) & (df['date'] > start_date) & (df['date'] <= end_date)
+    return df.loc[mask].copy()  # Return a copy to avoid SettingWithCopyWarning
+
+# Create a Plotly figure
+fig = go.Figure()
+
+# Color mapping for minor_type
+color_map = {'LONG': 'green', 'SHORT': 'red'}
+
+# Iterate through each row in similar_events
+for _, event in similar_events.iterrows():
+    asset = event['asset']
+    start_date = event['date']
+    
+    # Get next 30 days of data
+    next_30_days = get_next_30_days(asset, start_date)
+    
+    if not next_30_days.empty:
+        # Get the minor_type from df
+        minor_type = next_30_days.iloc[0]['minor_type']
+        
+        # Calculate days since start (T to T+30)
+        next_30_days['days_since_start'] = (next_30_days['date'] - start_date).dt.days
+        
+        # Add trace to the figure with area filling
+        fig.add_trace(go.Scatter(
+            x=next_30_days['days_since_start'],
+            y=next_30_days['total_return_local'],
+            mode='lines',
+            name=f"Asset: {asset}, Date: {start_date.date()}",
+            line=dict(color=color_map.get(minor_type, 'blue'))
+        ))
+        
+        # Add area under the curve
+        fig.add_traces([
+            go.Scatter(
+                x=next_30_days['days_since_start'],
+                y=np.where(next_30_days['total_return_local'] >= 0, next_30_days['total_return_local'], 0),
+                mode='none',
+                fill='tozeroy',
+                fillcolor='rgba(0, 255, 0, 0.2)',
+                showlegend=False
+            ),
+            go.Scatter(
+                x=next_30_days['days_since_start'],
+                y=np.where(next_30_days['total_return_local'] < 0, next_30_days['total_return_local'], 0),
+                mode='none',
+                fill='tozeroy',
+                fillcolor='rgba(255, 0, 0, 0.2)',
+                showlegend=False
+            )
+        ])
+
+# Add a reference line at y=0
+fig.add_shape(type="line",
+              x0=0, x1=30, y0=0, y1=0,
+              line=dict(color="Black", width=1, dash="dash"))
+
+# Update layout
+fig.update_layout(
+    title='Total Return Local from T to T+30',
+    xaxis_title='Days since event (T)',
+    yaxis_title='Total Return Local',
+    legend_title='Events',
+    hovermode='x unified',
+    xaxis=dict(
+        tickmode='array',
+        tickvals=list(range(0, 31, 5)),
+        ticktext=['T+'+str(i) for i in range(0, 31, 5)]
+    )
+)
+
+# Show the plot
+fig.show()
