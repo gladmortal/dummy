@@ -1,0 +1,193 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Dense, LSTM, Attention
+from tensorflow.keras.optimizers import Adam
+import tensorflow as tf
+from sklearn.neighbors import NearestNeighbors
+
+# Generate synthetic data
+np.random.seed(42)
+n_samples = 1000
+
+data = pd.DataFrame({
+    'asset': np.random.choice(['A', 'B', 'C', 'D', 'E'], n_samples),
+    'active_weight': np.random.uniform(-0.1, 0.1, n_samples),
+    'drawdown': np.random.uniform(-0.3, 0, n_samples),
+    'drawdown_days': np.random.randint(1, 100, n_samples),
+    'drawup': np.random.uniform(0, 0.3, n_samples),
+    'drawup_days': np.random.randint(1, 100, n_samples),
+    'cumulative_net_return': np.random.uniform(-0.2, 0.5, n_samples),
+    'total_return_local': np.random.uniform(-0.1, 0.2, n_samples),
+    'timestamp': pd.date_range(start='2020-01-01', periods=n_samples),
+    'episode_duration': np.random.randint(1, 365, n_samples)
+})
+
+# Sort data by timestamp
+data = data.sort_values('timestamp')
+
+# Visualize some key features
+plt.figure(figsize=(15, 10))
+plt.subplot(2, 2, 1)
+plt.plot(data['timestamp'], data['cumulative_net_return'])
+plt.title('Cumulative Net Return Over Time')
+plt.subplot(2, 2, 2)
+plt.scatter(data['drawdown'], data['drawup'])
+plt.title('Drawdown vs Drawup')
+plt.subplot(2, 2, 3)
+plt.hist(data['active_weight'], bins=30)
+plt.title('Distribution of Active Weight')
+plt.subplot(2, 2, 4)
+plt.boxplot([data[data['asset'] == asset]['total_return_local'] for asset in data['asset'].unique()], labels=data['asset'].unique())
+plt.title('Total Return Local by Asset')
+plt.tight_layout()
+plt.show()
+
+# Prepare data for the model
+features = ['active_weight', 'drawdown', 'drawdown_days', 'drawup', 'drawup_days', 'cumulative_net_return', 'total_return_local', 'episode_duration']
+X = data[features].values
+
+# Normalize the data
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Create sequences respecting asset boundaries
+sequence_length = 30
+X_sequences = []
+asset_groups = data.groupby('asset')
+
+for _, asset_data in asset_groups:
+    asset_X_scaled = X_scaled[asset_data.index]
+    asset_sequences = [asset_X_scaled[i-sequence_length:i] for i in range(sequence_length, len(asset_X_scaled))]
+    X_sequences.extend(asset_sequences)
+
+X_sequences = np.array(X_sequences)
+
+# Siamese network with attention
+def create_base_network(input_shape):
+    input = Input(shape=input_shape)
+    lstm = LSTM(64, return_sequences=True)(input)
+    attention = Attention()([lstm, lstm])
+    flatten = tf.keras.layers.Flatten()(attention)
+    dense1 = Dense(32, activation='relu')(flatten)
+    output = Dense(16, activation='relu')(dense1)
+    return Model(inputs=input, outputs=output)
+
+input_shape = (sequence_length, len(features))
+base_network = create_base_network(input_shape)
+
+input_a = Input(shape=input_shape)
+input_p = Input(shape=input_shape)
+input_n = Input(shape=input_shape)
+
+processed_a = base_network(input_a)
+processed_p = base_network(input_p)
+processed_n = base_network(input_n)
+
+# Triplet loss
+def triplet_loss(y_true, y_pred):
+    anchor, positive, negative = y_pred[:, :16], y_pred[:, 16:32], y_pred[:, 32:]
+    pos_dist = tf.reduce_sum(tf.square(anchor - positive), axis=1)
+    neg_dist = tf.reduce_sum(tf.square(anchor - negative), axis=1)
+    basic_loss = pos_dist - neg_dist + 0.1  # margin
+    loss = tf.maximum(basic_loss, 0.0)
+    return tf.reduce_mean(loss)
+
+merged_output = tf.keras.layers.concatenate([processed_a, processed_p, processed_n])
+model = Model(inputs=[input_a, input_p, input_n], outputs=merged_output)
+model.compile(loss=triplet_loss, optimizer=Adam(learning_rate=0.001))
+
+# Modified function to generate triplets based on Euclidean distances
+def generate_triplets(X_sequences, batch_size, k_neighbors=5):
+    # Flatten the sequences for KNN
+    X_flat = X_sequences.reshape(X_sequences.shape[0], -1)
+    
+    # Find k nearest neighbors for each sequence
+    nn = NearestNeighbors(n_neighbors=k_neighbors+1, metric='euclidean', n_jobs=-1)
+    nn.fit(X_flat)
+    distances, indices = nn.kneighbors(X_flat)
+    
+    while True:
+        batch_anchors = np.zeros((batch_size, sequence_length, len(features)))
+        batch_positives = np.zeros((batch_size, sequence_length, len(features)))
+        batch_negatives = np.zeros((batch_size, sequence_length, len(features)))
+        
+        for i in range(batch_size):
+            anchor_idx = np.random.randint(0, len(X_sequences))
+            
+            # Select a positive example from the k nearest neighbors
+            positive_idx = indices[anchor_idx, np.random.randint(1, k_neighbors+1)]
+            
+            # Select a negative example randomly, ensuring it's not in the k nearest neighbors
+            negative_candidates = np.setdiff1d(np.arange(len(X_sequences)), indices[anchor_idx])
+            negative_idx = np.random.choice(negative_candidates)
+            
+            batch_anchors[i] = X_sequences[anchor_idx]
+            batch_positives[i] = X_sequences[positive_idx]
+            batch_negatives[i] = X_sequences[negative_idx]
+        
+        yield [batch_anchors, batch_positives, batch_negatives], np.zeros((batch_size, 48))  # Dummy labels
+
+# Train the model with the updated triplet generation
+batch_size = 32
+history = model.fit(generate_triplets(X_sequences, batch_size), steps_per_epoch=100, epochs=10)
+
+# Plot training loss
+plt.figure(figsize=(10, 5))
+plt.plot(history.history['loss'])
+plt.title('Model Loss During Training')
+plt.ylabel('Loss')
+plt.xlabel('Epoch')
+plt.show()
+
+# Function to find similar situations
+def find_similar_situations(model, input_sequence, X_sequences, top_n=5):
+    input_embedding = base_network.predict(np.expand_dims(input_sequence, axis=0))
+    all_embeddings = base_network.predict(X_sequences)
+    
+    distances = np.sum(np.square(all_embeddings - input_embedding), axis=1)
+    similar_indices = np.argsort(distances)[:top_n]
+    
+    return similar_indices
+
+# Example usage
+current_situation = X_sequences[-1]  # Use the last sequence as the current situation
+similar_indices = find_similar_situations(model, current_situation, X_sequences)
+
+print("Similar situations found at indices:", similar_indices)
+print("Corresponding timestamps:")
+for idx in similar_indices:
+    print(data['timestamp'].iloc[idx + sequence_length])
+
+# Analyze what the PM did in these similar situations and their outcomes
+for idx in similar_indices:
+    situation_start = data['timestamp'].iloc[idx + sequence_length]
+    situation_end = data['timestamp'].iloc[idx + sequence_length + 30]  # Assuming 30 days forward
+    
+    print(f"\nSimilar situation from {situation_start} to {situation_end}:")
+    print(f"Initial drawdown: {data['drawdown'].iloc[idx + sequence_length]:.2%}")
+    print(f"Final cumulative return: {data['cumulative_net_return'].iloc[idx + sequence_length + 30]:.2%}")
+    
+    # You can add more analysis here based on what actions the PM typically takes
+    # For example, changes in active weight, holding duration, etc.
+
+# Visualize the embedding space
+from sklearn.decomposition import PCA
+
+# Get embeddings for all sequences
+all_embeddings = base_network.predict(X_sequences)
+
+# Reduce dimensionality for visualization
+pca = PCA(n_components=2)
+embeddings_2d = pca.fit_transform(all_embeddings)
+
+plt.figure(figsize=(12, 8))
+scatter = plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], c=data['cumulative_net_return'].iloc[sequence_length:], cmap='viridis')
+plt.colorbar(scatter, label='Cumulative Net Return')
+plt.title('2D Visualization of Sequence Embeddings')
+plt.xlabel('PCA Component 1')
+plt.ylabel('PCA Component 2')
+plt.show()
+
