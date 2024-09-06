@@ -1,0 +1,40 @@
+Got it! I've added the note about pushing the neighbor data into a Snowflake table to enable Engineering to start working on their tasks:
+
+---
+
+Subject: Next Steps for Portfolio Management Project: Data Science, Engineering, and Strategy
+
+Dear Team,
+
+I have spoken with Will and Sneza regarding our immediate next steps for our portfolio management project. Here is the plan we should be working on in parallel from data science, engineering, and strategy sides:
+
+**Data Science Focus:**
+
+- **DS1**: Use any baseline model (let's consider ANNoy) for now and push the neighbor data for all/subset of situations into a Snowflake table to enable Engineering to start working on their tasks.
+- **DS2**: Continue developing more advanced and complex models like VAE or Sesame Network.
+- **DS3**: Start writing the production code for feature engineering, model building, inference, and validation.
+- **DS4**: Finalize the code structure to be modular and flexible to switch models.
+- **DS5**: Finalize any additional out-of-the-box features (e.g., Macro, Drawup, VQM, SM factors).
+
+**Data Engineering/Tech Focus:**
+
+- **DE1**: Set up the initial tables in Snowflake to store the neighbors and T+30/T-30 data.
+- **DE2**: Explore options to run the analysis on-the-fly or pre-computed (behavior data, hit rate, payoff).
+- **DE3**: Implement batch jobs to compute neighbors.
+- **DE4**: Develop an API to pull data from Snowflake.
+- **DE5**: Create a widget in stock summary.
+
+**Strategy Focus:**
+
+- **S1**: Prepare a slide with visuals and examples to summarize the entire clustering exercise.
+- **S2**: Finalize the story around what graphs and tables we need.
+- **S3**: Develop a strategy around rollout, including PM prioritization and feedback.
+
+Let's ensure we are aligned and make progress on these tasks simultaneously to support our portfolio managers effectively.
+
+Best regards,  
+[Your Name]
+
+---
+
+Let me know if you need any further adjustments!
