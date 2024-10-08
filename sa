@@ -1,0 +1,57 @@
+from snowflake.snowpark import Session
+from snowflake.snowpark.functions import col, lit, array_construct, array_flatten, sqrt, sum as snowflake_sum, row_number
+from snowflake.snowpark.window import Window
+
+def calculate_euclidean_distance(df, reference_date):
+    # Filter the reference row
+    reference_row = df.filter(col("DATE") == lit(reference_date))
+    
+    # Create arrays from the latent embeddings
+    df = df.with_column("embedding_array", array_flatten(col("LATENT_EMBEDDINGS")))
+    reference_row = reference_row.with_column("ref_embedding_array", array_flatten(col("LATENT_EMBEDDINGS")))
+    
+    # Rename columns in reference_row to avoid conflicts
+    reference_row = reference_row.select(
+        col("ASSET").alias("ref_ASSET"),
+        col("DATE").alias("ref_DATE"),
+        col("ref_embedding_array")
+    )
+    
+    # Cross join to calculate distances
+    result = df.cross_join(reference_row)
+    
+    # Calculate Euclidean distance
+    embedding_length = len(df.collect()[0]["LATENT_EMBEDDINGS"])
+    squared_diff_expressions = [
+        (col("embedding_array").get(lit(i)) - col("ref_embedding_array").get(lit(i)))**2 
+        for i in range(embedding_length)
+    ]
+    result = result.with_column(
+        "distance",
+        sqrt(snowflake_sum(squared_diff_expressions))
+    )
+    
+    # Select relevant columns and filter out the reference row
+    result = result.select(
+        col("ASSET").alias("neighbour_asset"),
+        col("DATE").alias("neighbour_date"),
+        col("ref_ASSET").alias("reference_asset"),
+        col("ref_DATE").alias("reference_date"),
+        col("distance")
+    ).filter(col("neighbour_date") != col("ref_DATE"))
+    
+    # Use window function to rank distances
+    window = Window.partition_by("reference_asset", "reference_date").order_by(col("distance"))
+    result = result.with_column("rank", row_number().over(window))
+    
+    # Filter to get top N nearest neighbors (e.g., top 10)
+    result = result.filter(col("rank") <= 10)
+    
+    return result
+
+# Example usage (assuming session and df are already set up)
+reference_date = "2024-08-05"
+result_df = calculate_euclidean_distance(df, reference_date)
+
+# Show results
+result_df.show()
