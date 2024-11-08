@@ -1,0 +1,197 @@
+import pandas as pd
+import numpy as np
+from scipy import stats
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+class BehavioralBiasDetector:
+    def __init__(self, episodes_df, factors_df):
+        self.episodes_df = episodes_df
+        self.factors_df = factors_df
+        
+    def preprocess_data(self):
+        # Convert episode data into analysis format
+        self.episodes_df['execution_timestamp'] = pd.to_datetime(self.episodes_df['EXECUTION_TIMESTAMP'])
+        self.episodes_df['total_return'] = self.episodes_df['total_return_base']
+        self.episodes_df['duration'] = self.episodes_df['simple_duration']
+        
+        # Calculate key metrics
+        self.episodes_df['holding_period'] = (
+            self.episodes_df.groupby('ACCOUNT_CODE')['execution_timestamp'].diff()
+        )
+        
+    def detect_disposition_effect(self):
+        """
+        Disposition Effect: Tendency to sell winners too early and hold losers too long
+        """
+        # Calculate holding periods for gains and losses
+        gains = self.episodes_df[self.episodes_df['total_return'] > 0]['holding_period']
+        losses = self.episodes_df[self.episodes_df['total_return'] < 0]['holding_period']
+        
+        disposition_ratio = gains.mean() / losses.mean()
+        
+        return {
+            'disposition_ratio': disposition_ratio,
+            'avg_holding_period_gains': gains.mean(),
+            'avg_holding_period_losses': losses.mean()
+        }
+    
+    def detect_overconfidence(self):
+        """
+        Overconfidence: Increasing position sizes after successful episodes
+        """
+        # Calculate running success rate and position size changes
+        self.episodes_df['rolling_success'] = (
+            (self.episodes_df['total_return'] > 0)
+            .rolling(window=5)
+            .mean()
+        )
+        
+        # Analyze if position sizes increase with success
+        correlation = np.corrcoef(
+            self.episodes_df['rolling_success'],
+            self.episodes_df['bet_size_median']
+        )[0,1]
+        
+        return {
+            'overconfidence_correlation': correlation
+        }
+    
+    def analyze_factor_influence(self, n_top_factors=10):
+        """
+        Analyze which factors most influence decision making
+        """
+        # Merge episodes with factors
+        combined_df = pd.merge(
+            self.episodes_df,
+            self.factors_df,
+            on=['ASSET', 'execution_timestamp'],
+            how='inner'
+        )
+        
+        # Calculate factor correlations with returns
+        factor_correlations = {}
+        for factor in self.factors_df.columns:
+            if factor not in ['ASSET', 'execution_timestamp']:
+                correlation = stats.spearmanr(
+                    combined_df[factor],
+                    combined_df['total_return']
+                )[0]
+                factor_correlations[factor] = abs(correlation)
+        
+        # Get top influential factors
+        top_factors = dict(
+            sorted(factor_correlations.items(), 
+                  key=lambda x: abs(x[1]), 
+                  reverse=True)[:n_top_factors]
+        )
+        
+        return top_factors
+    
+    def detect_anchoring_bias(self):
+        """
+        Anchoring Bias: Making decisions based heavily on first piece of information
+        """
+        # Calculate if decisions are anchored to recent price levels
+        self.episodes_df['prev_high'] = self.episodes_df.groupby('ASSET')['VALUE'].transform(
+            lambda x: x.rolling(window=20).max().shift()
+        )
+        
+        anchor_correlation = np.corrcoef(
+            self.episodes_df['VALUE'],
+            self.episodes_df['prev_high']
+        )[0,1]
+        
+        return {
+            'anchoring_coefficient': anchor_correlation
+        }
+    
+    def analyze_factor_timing(self):
+        """
+        Analyze if PMs time their decisions well with factor signals
+        """
+        # Merge with factor data
+        combined_df = pd.merge(
+            self.episodes_df,
+            self.factors_df,
+            on=['ASSET', 'execution_timestamp'],
+            how='inner'
+        )
+        
+        # Calculate factor timing scores
+        factor_timing = {}
+        for factor in self.factors_df.columns:
+            if factor not in ['ASSET', 'execution_timestamp']:
+                # Calculate if decisions align with factor signals
+                timing_score = stats.spearmanr(
+                    combined_df[factor],
+                    combined_df['total_return']
+                )[0]
+                factor_timing[factor] = timing_score
+                
+        return factor_timing
+
+    def generate_bias_report(self):
+        """
+        Generate comprehensive bias analysis report
+        """
+        disposition = self.detect_disposition_effect()
+        overconfidence = self.detect_overconfidence()
+        anchoring = self.detect_anchoring_bias()
+        factor_influence = self.analyze_factor_influence()
+        factor_timing = self.analyze_factor_timing()
+        
+        report = {
+            'disposition_effect': disposition,
+            'overconfidence': overconfidence,
+            'anchoring_bias': anchoring,
+            'top_factors': factor_influence,
+            'factor_timing': factor_timing
+        }
+        
+        return report
+
+# Usage example:
+# Initialize detector
+detector = BehavioralBiasDetector(episodes_df, factors_df)
+
+# Preprocess data
+detector.preprocess_data()
+
+# Generate comprehensive report
+bias_report = detector.generate_bias_report()
+
+# Visualize results
+def plot_bias_analysis(bias_report):
+    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    
+    # Plot disposition effect
+    axes[0,0].bar(['Gains', 'Losses'], 
+                 [bias_report['disposition_effect']['avg_holding_period_gains'],
+                  bias_report['disposition_effect']['avg_holding_period_losses']])
+    axes[0,0].set_title('Disposition Effect: Holding Periods')
+    
+    # Plot factor influence
+    factors = list(bias_report['top_factors'].keys())[:5]
+    correlations = list(bias_report['top_factors'].values())[:5]
+    axes[0,1].barh(factors, correlations)
+    axes[0,1].set_title('Top 5 Influential Factors')
+    
+    # Plot overconfidence
+    axes[1,0].scatter(episodes_df['rolling_success'], 
+                     episodes_df['bet_size_median'])
+    axes[1,0].set_title('Overconfidence Analysis')
+    
+    # Plot factor timing
+    timing_factors = list(bias_report['factor_timing'].keys())[:5]
+    timing_scores = list(bias_report['factor_timing'].values())[:5]
+    axes[1,1].bar(timing_factors, timing_scores)
+    axes[1,1].set_title('Factor Timing Efficiency')
+    
+    plt.tight_layout()
+    plt.show()
+
+# Plot results
+plot_bias_analysis(bias_report)
