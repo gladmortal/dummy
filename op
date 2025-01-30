@@ -1,0 +1,253 @@
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from scipy.optimize import milp, LinearConstraint, Bounds
+from sklearn.utils import resample
+
+# ----------------------------
+# 1. Data Preparation
+# ----------------------------
+
+def load_and_preprocess(file_path):
+    """
+    Load raw data and preprocess factor quintiles.
+    
+    Args:
+        file_path (str): Path to CSV/Excel file
+        
+    Returns:
+        pd.DataFrame: Cleaned dataframe with quintile columns
+    """
+    df = pd.read_excel(file_path)  # Adjust for CSV if needed
+    
+    # Identify factor quintile columns (ending with "-quintile")
+    quintile_cols = [col for col in df.columns if '-quintile' in col]
+    factors = [col.replace('-quintile', '') for col in quintile_cols]
+    
+    # Convert quintiles to ordinal values (Q1=1 to Q5=5)
+    for col in quintile_cols:
+        df[col] = df[col].str.extract('(\d)').astype(float)
+        
+    return df, factors, quintile_cols
+
+# ----------------------------
+# 2. Performance Analysis
+# ----------------------------
+
+def analyze_quintile_performance(df, factors, quintile_cols, target_return='TOTAL_RETURN_LOCAL'):
+    """
+    Calculate average returns and counts for each factor quintile.
+    
+    Args:
+        df (pd.DataFrame): Preprocessed data
+        factors (list): List of factor names
+        quintile_cols (list): List of quintile columns
+        target_return (str): Name of return column
+        
+    Returns:
+        dict: Dictionary of performance DataFrames keyed by factor
+    """
+    performance = {}
+    
+    for factor, q_col in zip(factors, quintile_cols):
+        valid_df = df.dropna(subset=[q_col, target_return])
+        grouped = valid_df.groupby(q_col)[target_return].agg(
+            ['mean', 'count', 'std']
+        ).reset_index()
+        grouped.columns = ['quintile', 'avg_return', 'n_obs', 'std_dev']
+        performance[factor] = grouped
+        
+    return performance
+
+# ----------------------------
+# 3. Bootstrap Variance Calculation
+# ----------------------------
+
+def calculate_bootstrap_variance(df, factors, quintile_cols, target_return, n_boot=1000):
+    """
+    Calculate bootstrap variance for each factor-quintile combination.
+    
+    Args:
+        df (pd.DataFrame): Input data
+        factors (list): List of factors to analyze
+        quintile_cols (list): Corresponding quintile columns
+        target_return (str): Name of return column
+        n_boot (int): Number of bootstrap samples
+        
+    Returns:
+        dict: Dictionary of variance DataFrames keyed by factor
+    """
+    bootstrap_vars = {}
+    
+    for factor, q_col in zip(factors, quintile_cols):
+        var_data = []
+        for q in sorted(df[q_col].dropna().unique()):
+            subset = df[(df[q_col] == q)][target_return].dropna()
+            if len(subset) < 10:
+                var = np.nan
+            else:
+                boot_means = [resample(subset).mean() for _ in range(n_boot)]
+                var = np.var(boot_means)
+            var_data.append({'quintile': q, 'bootstrap_var': var})
+        
+        bootstrap_vars[factor] = pd.DataFrame(var_data)
+        
+    return bootstrap_vars
+
+# ----------------------------
+# 4. Optimization Setup
+# ----------------------------
+
+def prepare_optimization(performance, bootstrap_vars, current_portfolio, lambda_=0.3):
+    """
+    Prepare MILP optimization components.
+    
+    Args:
+        performance (dict): Quintile performance data
+        bootstrap_vars (dict): Bootstrap variance data
+        current_portfolio (dict): Current factor allocations {factor: quintile}
+        lambda_ (float): Risk aversion parameter
+        
+    Returns:
+        tuple: (c, constraints, bounds) for MILP setup
+    """
+    # 1. Calculate normalized scores
+    factor_scores = {}
+    for factor in current_portfolio.keys():
+        df = performance[factor].merge(
+            bootstrap_vars[factor], on='quintile'
+        )
+        df['norm_var'] = df['bootstrap_var'] / df['bootstrap_var'].max()
+        df['score'] = df['avg_return'] - lambda_ * df['norm_var']
+        factor_scores[factor] = df
+        
+    # 2. Build objective coefficients
+    c = []
+    possible_changes = []
+    for factor, curr_q in current_portfolio.items():
+        scores = factor_scores[factor]
+        optimal_q = scores.loc[scores['score'].idxmax(), 'quintile']
+        
+        if optimal_q != curr_q:
+            delta = scores[scores['quintile'] == optimal_q]['score'].values[0]
+            - scores[scores['quintile'] == curr_q]['score'].values[0]
+            c.append(-delta)  # Negative because MILP minimizes
+            possible_changes.append((factor, curr_q, optimal_q, delta))
+            
+    # 3. Set up constraints
+    n_vars = len(possible_changes)
+    constraints = LinearConstraint(A=np.ones(n_vars), lb=3, ub=3)
+    bounds = Bounds(0, 1)  # Binary variables
+    
+    return c, constraints, bounds, possible_changes
+
+# ----------------------------
+# 5. Visualization Functions
+# ----------------------------
+
+def plot_quintile_performance(factor, performance, bootstrap_vars):
+    """
+    Generate interactive performance plot for a factor.
+    
+    Args:
+        factor (str): Factor name to visualize
+        performance (dict): Performance data
+        bootstrap_vars (dict): Variance data
+    """
+    df = performance[factor].merge(
+        bootstrap_vars[factor], on='quintile'
+    )
+    
+    fig = px.scatter(
+        df, x='avg_return', y='norm_var',
+        size='n_obs', color='quintile',
+        hover_data=['std_dev', 'bootstrap_var'],
+        title=f"{factor} Performance Landscape<br><sup>Size=Observations, Color=Quintile</sup>"
+    )
+    
+    fig.update_layout(
+        xaxis_title="Average Return (%)",
+        yaxis_title="Normalized Bootstrap Variance",
+        hovermode="closest"
+    )
+    fig.show()
+
+def plot_optimization_results(possible_changes, solution):
+    """
+    Visualize optimization results.
+    
+    Args:
+        possible_changes (list): List of potential changes
+        solution (np.array): MILP solution vector
+    """
+    results = []
+    for (factor, curr_q, optimal_q, delta), x in zip(possible_changes, solution):
+        results.append({
+            'Factor': factor,
+            'Current Quintile': f"Q{int(curr_q)}",
+            'Recommended Quintile': f"Q{int(optimal_q)}",
+            'Expected Improvement': delta,
+            'Selected': x > 0.5
+        })
+        
+    df = pd.DataFrame(results)
+    
+    fig = px.bar(
+        df[df['Selected']], 
+        x='Factor', 
+        y='Expected Improvement',
+        color='Recommended Quintile',
+        pattern_shape='Current Quintile',
+        title="Recommended Portfolio Changes"
+    )
+    
+    fig.update_layout(
+        yaxis_title="Expected Return Improvement (%)",
+        xaxis_title="Factor",
+        showlegend=True
+    )
+    fig.show()
+
+# ----------------------------
+# 6. Main Execution
+# ----------------------------
+
+if __name__ == "__main__":
+    # Configuration
+    FILE_PATH = "portfolio_data.xlsx"
+    CURRENT_PORTFOLIO = {
+        'failure_model.vol': 5,
+        'iegbf-alpha.global.alicap.m.qual': 4,
+        'market_data_market_cap': 3,
+        'iegbf.cas.raw.starmine_surp': 1
+    }
+    LAMBDA = 0.3
+    
+    # 1. Load data
+    df, factors, quintile_cols = load_and_preprocess(FILE_PATH)
+    
+    # 2. Analyze performance
+    performance = analyze_quintile_performance(df, factors, quintile_cols)
+    
+    # 3. Calculate variance
+    bootstrap_vars = calculate_bootstrap_variance(df, factors, quintile_cols, 'TOTAL_RETURN_LOCAL')
+    
+    # 4. Prepare optimization
+    c, constraints, bounds, possible_changes = prepare_optimization(
+        performance, bootstrap_vars, CURRENT_PORTFOLIO, LAMBDA
+    )
+    
+    # 5. Run optimization
+    result = milp(c=c, constraints=constraints, bounds=bounds, integrality=1)
+    
+    # 6. Visualize
+    if result.success:
+        print("Optimization successful!")
+        plot_optimization_results(possible_changes, result.x)
+        
+        # Show detailed factor analysis for top 3 factors
+        for factor in list(CURRENT_PORTFOLIO.keys())[:3]:
+            plot_quintile_performance(factor, performance, bootstrap_vars)
+    else:
+        print("Optimization failed. Check constraints or data quality.")
