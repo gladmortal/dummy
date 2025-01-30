@@ -1,0 +1,239 @@
+"""
+Factor Optimization with Missing Quantile Handling
+Author: JP Morgan Asset Management Data Science Team
+Date: [Insert Date]
+"""
+
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from scipy.optimize import milp, LinearConstraint, Bounds
+
+# ----------------------------
+# 1. Data Preparation
+# ----------------------------
+
+def load_and_preprocess(file_path):
+    """
+    Load raw data and preprocess factor quintiles.
+    
+    Args:
+        file_path (str): Path to CSV/Excel file
+        
+    Returns:
+        pd.DataFrame: Cleaned dataframe with quintile columns
+    """
+    df = pd.read_excel(file_path)  # Adjust for CSV if needed
+    
+    # Identify factor quintile columns (ending with "-quintile")
+    quintile_cols = [col for col in df.columns if '-quintile' in col]
+    factors = [col.replace('-quintile', '') for col in quintile_cols]
+    
+    # Convert quintiles to ordinal values (Q1=1 to Q5=5)
+    for col in quintile_cols:
+        df[col] = df[col].str.extract('(\d)').astype(float)
+        
+    return df, factors, quintile_cols
+
+# ----------------------------
+# 2. Missing Data Handling
+# ----------------------------
+
+def filter_low_coverage_factors(df, quintile_cols, coverage_threshold=0.7):
+    """
+    Exclude factors with insufficient episode coverage
+    
+    Args:
+        df (pd.DataFrame): Input data
+        quintile_cols (list): List of quintile columns
+        coverage_threshold (float): Minimum coverage ratio (0-1)
+        
+    Returns:
+        tuple: (valid_factors, coverage_dict)
+    """
+    factor_coverage = {
+        col.replace('-quintile', ''): df[col].notna().mean() 
+        for col in quintile_cols
+    }
+    valid_factors = [f for f, cov in factor_coverage.items() if cov >= coverage_threshold]
+    return valid_factors, factor_coverage
+
+def calculate_episode_weights(df, valid_factors, quintile_cols):
+    """
+    Create episode-wise availability mask
+    
+    Args:
+        df (pd.DataFrame): Input data
+        valid_factors (list): List of factors meeting coverage threshold
+        quintile_cols (list): Full list of quintile columns
+        
+    Returns:
+        pd.DataFrame: Binary mask of factor availability
+    """
+    mask = pd.DataFrame(index=df.index)
+    for factor in valid_factors:
+        q_col = f"{factor}-quintile"
+        mask[factor] = df[q_col].notna().astype(int)
+    return mask
+
+# ----------------------------
+# 3. Performance Analysis
+# ----------------------------
+
+def calculate_weighted_performance(df, valid_factors, mask, target_return='TOTAL_RETURN_LOCAL'):
+    """
+    Compute metrics using only available episodes
+    
+    Args:
+        df (pd.DataFrame): Input data
+        valid_factors (list): List of valid factors
+        mask (pd.DataFrame): Availability mask
+        target_return (str): Name of return column
+        
+    Returns:
+        dict: Dictionary of performance DataFrames keyed by factor
+    """
+    performance = {}
+    for factor in valid_factors:
+        valid_idx = mask[mask[factor] == 1].index
+        sub_df = df.loc[valid_idx]
+        
+        # Calculate metrics
+        grouped = sub_df.groupby(f"{factor}-quintile")[target_return].agg(
+            ['mean', 'count', 'std']
+        ).reset_index()
+        grouped.columns = ['quintile', 'avg_return', 'n_obs', 'std_dev']
+        
+        # Availability weighting
+        coverage = len(sub_df)/len(df)
+        grouped['weighted_mean'] = grouped['avg_return'] * coverage
+        performance[factor] = grouped
+        
+    return performance
+
+# ----------------------------
+# 4. Optimization Setup
+# ----------------------------
+
+def prepare_availability_optimization(performance, current_portfolio):
+    """
+    Adjusted MILP setup with availability constraints
+    
+    Args:
+        performance (dict): Performance data from calculate_weighted_performance
+        current_portfolio (dict): Current factor allocations {factor: quintile}
+        
+    Returns:
+        tuple: (c, constraints, bounds, possible_changes)
+    """
+    c = []
+    possible_changes = []
+    
+    for factor, curr_q in current_portfolio.items():
+        if factor not in performance:
+            continue  # Skip excluded factors
+            
+        df = performance[factor]
+        optimal_q = df.loc[df['weighted_mean'].idxmax(), 'quintile']
+        delta = df[df['quintile'] == optimal_q]['weighted_mean'].values[0] 
+        - df[df['quintile'] == curr_q]['weighted_mean'].values[0]
+        
+        if delta > 0:
+            c.append(-delta)  # Negative for minimization
+            possible_changes.append((factor, curr_q, optimal_q, delta))
+    
+    # Constraints: Max 3 changes from valid candidates
+    constraints = LinearConstraint(A=np.ones(len(c)), lb=0, ub=3)
+    bounds = Bounds(0, 1)
+    
+    return c, constraints, bounds, possible_changes
+
+# ----------------------------
+# 5. Visualization
+# ----------------------------
+
+def plot_factor_coverage(factor_coverage):
+    """Interactive coverage visualization"""
+    df = pd.DataFrame({
+        'Factor': factor_coverage.keys(),
+        'Coverage': [v*100 for v in factor_coverage.values()]
+    }).sort_values('Coverage')
+    
+    fig = px.bar(df, x='Coverage', y='Factor', orientation='h',
+                 title="Factor Availability Across Episodes",
+                 labels={'Coverage': '% of Episodes Available'})
+    fig.add_vline(x=70, line_dash="dot", 
+                  annotation_text="70% Cutoff", 
+                  line_color="red")
+    fig.show()
+
+def plot_optimization_results(possible_changes, solution):
+    """Visualize optimization recommendations"""
+    results = []
+    for (factor, curr_q, optimal_q, delta), x in zip(possible_changes, solution):
+        results.append({
+            'Factor': factor,
+            'Current Quintile': f"Q{int(curr_q)}",
+            'Recommended Quintile': f"Q{int(optimal_q)}",
+            'Expected Improvement': delta,
+            'Selected': x > 0.5
+        })
+        
+    df = pd.DataFrame(results)
+    
+    fig = px.bar(
+        df[df['Selected']], 
+        x='Factor', 
+        y='Expected Improvement',
+        color='Recommended Quintile',
+        pattern_shape='Current Quintile',
+        title="Recommended Portfolio Changes"
+    )
+    
+    fig.update_layout(
+        yaxis_title="Expected Return Improvement (%)",
+        xaxis_title="Factor",
+        showlegend=True
+    )
+    fig.show()
+
+# ----------------------------
+# 6. Main Execution
+# ----------------------------
+
+if __name__ == "__main__":
+    # Configuration
+    FILE_PATH = "portfolio_data.xlsx"
+    CURRENT_PORTFOLIO = {
+        'failure_model.vol': 5,
+        'iegbf-alpha.global.alicap.m.qual': 4,
+        'market_data_market_cap': 3,
+        'iegbf.cas.raw.starmine_surp': 1
+    }
+    
+    # 1. Load data
+    df, factors, quintile_cols = load_and_preprocess(FILE_PATH)
+    
+    # 2. Handle missing data
+    valid_factors, coverage = filter_low_coverage_factors(df, quintile_cols)
+    mask = calculate_episode_weights(df, valid_factors, quintile_cols)
+    
+    # 3. Analyze performance
+    performance = calculate_weighted_performance(df, valid_factors, mask)
+    
+    # 4. Prepare optimization
+    c, constraints, bounds, possible_changes = prepare_availability_optimization(
+        performance, CURRENT_PORTFOLIO
+    )
+    
+    # 5. Run optimization
+    result = milp(c=c, constraints=constraints, bounds=bounds, integrality=1)
+    
+    # 6. Visualize results
+    plot_factor_coverage(coverage)
+    if result.success:
+        print("Optimization successful!")
+        plot_optimization_results(possible_changes, result.x)
+    else:
+        print("Optimization failed. Check constraints or data quality.")
