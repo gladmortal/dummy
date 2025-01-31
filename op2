@@ -1,0 +1,214 @@
+"""
+Enhanced Factor Optimization with Robust Handling
+Author: JP Morgan Asset Management Data Science Team
+Date: [Insert Date]
+"""
+
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from scipy.optimize import milp, LinearConstraint, Bounds
+from sklearn.utils import resample
+from scipy import stats
+
+# ----------------------------
+# 1. Data Preparation with Categorical Handling
+# ----------------------------
+
+def load_and_preprocess(file_path):
+    """
+    Load data with proper categorical handling of quintiles
+    """
+    df = pd.read_excel(file_path)
+    quintile_cols = [col for col in df.columns if '-quintile' in col]
+    
+    # Convert to ordered categorical with proper NA handling
+    for col in quintile_cols:
+        df[col] = (
+            df[col]
+            .astype('category', categories=['Q1', 'Q2', 'Q3', 'Q4', 'Q5'], ordered=True)
+            .cat.codes.add(1)  # Q1=1, Q5=5
+            .replace(-1, np.nan)  # Handle missing categories
+        )
+        
+    return df, [col.replace('-quintile', '') for col in quintile_cols], quintile_cols
+
+# ----------------------------
+# 2. Enhanced Bootstrap Variance
+# ----------------------------
+
+def calculate_bootstrap_variance(df, factors, quintile_cols, target_return, n_boot=500):
+    """
+    Robust bootstrap with confidence intervals
+    """
+    bootstrap_data = []
+    
+    for factor, q_col in zip(factors, quintile_cols):
+        for q in range(1, 6):
+            mask = (df[q_col] == q)
+            returns = df.loc[mask, target_return].dropna()
+            
+            if len(returns) < 10:
+                record = {
+                    'factor': factor,
+                    'quintile': q,
+                    'variance': np.nan,
+                    'ci_low': np.nan,
+                    'ci_high': np.nan
+                }
+            else:
+                boot_means = [resample(returns).mean() for _ in range(n_boot)]
+                record = {
+                    'factor': factor,
+                    'quintile': q,
+                    'variance': np.var(boot_means),
+                    'ci_low': np.percentile(boot_means, 2.5),
+                    'ci_high': np.percentile(boot_means, 97.5)
+                }
+                
+            bootstrap_data.append(record)
+            
+    return pd.DataFrame(bootstrap_data)
+
+# ----------------------------
+# 3. Significance Testing
+# ----------------------------
+
+def calculate_significance(df, factors, quintile_cols, target_return):
+    """
+    Wilcoxon signed-rank test for non-normal returns
+    """
+    significance_data = []
+    
+    for factor, q_col in zip(factors, quintile_cols):
+        for q in range(1, 6):
+            returns = df[df[q_col] == q][target_return].dropna()
+            if len(returns) < 10:
+                p_value = np.nan
+            else:
+                _, p_value = stats.wilcoxon(returns - df[target_return].mean())
+                
+            significance_data.append({
+                'factor': factor,
+                'quintile': q,
+                'p_value': p_value
+            })
+            
+    return pd.DataFrame(significance_data)
+
+# ----------------------------
+# 4. Optimization Scoring
+# ----------------------------
+
+def calculate_penalized_scores(performance, bootstrap_df, significance_df, lambda_var=0.3, lambda_sig=0.2):
+    """
+    Score = Return - λ1*Variance - λ2*(1 - Significance)
+    """
+    merged = (
+        performance
+        .merge(bootstrap_df, on=['factor', 'quintile'])
+        .merge(significance_df, on=['factor', 'quintile'])
+    )
+    
+    merged['significance_penalty'] = np.where(
+        merged['p_value'] < 0.05, 
+        0, 
+        1 - merged['p_value']  # Stronger penalty for p > 0.05
+    )
+    
+    merged['score'] = (
+        merged['avg_return'] 
+        - lambda_var * merged['variance'] 
+        - lambda_sig * merged['significance_penalty']
+    )
+    
+    return merged
+
+# ----------------------------
+# 5. Enhanced Visualization
+# ----------------------------
+
+def plot_optimization_impact(merged_df, changes):
+    """
+    Visualize performance impact with confidence intervals
+    """
+    impact_data = []
+    for factor, curr_q, new_q, _ in changes:
+        curr = merged_df[(merged_df['factor'] == factor) & (merged_df['quintile'] == curr_q)]
+        new = merged_df[(merged_df['factor'] == factor) & (merged_df['quintile'] == new_q)]
+        
+        impact_data.append({
+            'Factor': factor,
+            'Change': f"Q{curr_q}→Q{new_q}",
+            'Current Return': curr['avg_return'].values[0],
+            'New Return': new['avg_return'].values[0],
+            'CI Low': new['ci_low'].values[0],
+            'CI High': new['ci_high'].values[0],
+            'Variance Reduction': curr['variance'].values[0] - new['variance'].values[0]
+        })
+        
+    df = pd.DataFrame(impact_data)
+    
+    fig = go.Figure()
+    
+    # Confidence intervals
+    fig.add_trace(go.Scatter(
+        x=df['Change'], y=df['CI High'],
+        mode='lines', line_color='rgba(0,0,0,0)',
+        showlegend=False
+    ))
+    fig.add_trace(go.Scatter(
+        x=df['Change'], y=df['CI Low'],
+        mode='lines', line_color='rgba(0,0,0,0)',
+        fill='tonexty', fillcolor='rgba(173,216,230,0.2)',
+        name='95% CI'
+    ))
+    
+    # Return points
+    fig.add_trace(go.Scatter(
+        x=df['Change'], y=df['New Return'],
+        mode='markers+text',
+        marker=dict(color='green', size=12),
+        text=df['Variance Reduction'].round(3),
+        textposition="top center",
+        name='Expected Return (ΔVar)'
+    ))
+    
+    fig.update_layout(
+        title="Optimization Impact Analysis",
+        yaxis_title="Annualized Return (%)",
+        xaxis_title="Proposed Changes",
+        hovermode="x unified"
+    )
+    
+    fig.show()
+
+# ----------------------------
+# 6. Main Workflow
+# ----------------------------
+
+if __name__ == "__main__":
+    # Configuration
+    FILE_PATH = "portfolio_data.xlsx"
+    TARGET_RETURN = "TOTAL_RETURN_LOCAL"
+    LAMBDA_VAR = 0.3  # Variance penalty weight
+    LAMBDA_SIG = 0.2  # Significance penalty weight
+    
+    # 1. Load data
+    df, factors, quintile_cols = load_and_preprocess(FILE_PATH)
+    
+    # 2. Calculate metrics
+    bootstrap_df = calculate_bootstrap_variance(df, factors, quintile_cols, TARGET_RETURN)
+    significance_df = calculate_significance(df, factors, quintile_cols, TARGET_RETURN)
+    
+    # 3. Calculate performance
+    performance = calculate_weighted_performance(df, factors, quintile_cols, TARGET_RETURN)
+    scored_factors = calculate_penalized_scores(performance, bootstrap_df, significance_df, LAMBDA_VAR, LAMBDA_SIG)
+    
+    # 4. Optimization
+    # ... (similar optimization logic as before but using scored_factors)
+    
+    # 5. Visualization
+    plot_optimization_impact(scored_factors, optimized_changes)
+    plot_significance_tradeoff(scored_factors)
