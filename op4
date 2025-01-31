@@ -1,0 +1,47 @@
+# ----------------------------
+# 0. Infer Current Actions
+# ----------------------------
+
+def infer_current_actions(df, threshold=0.6):
+    """Auto-detect PM's current quantile focus from holdings"""
+    current_actions = {}
+    
+    # Get all quantile columns
+    quant_cols = [col for col in df.columns if '-quantile' in col]
+    
+    for col in quant_cols:
+        factor = col.replace('-quantile', '')
+        
+        # Calculate top/bottom exposure frequency
+        top_exposure = df[col].eq('Q5').mean()
+        bottom_exposure = df[col].eq('Q1').mean()
+        
+        if top_exposure >= threshold:
+            current_actions[(factor, 'top')] = 1
+        if bottom_exposure >= threshold:
+            current_actions[(factor, 'bottom')] = 1
+            
+    return current_actions
+
+# ----------------------------
+# Modified Main Workflow
+# ----------------------------
+
+if __name__ == "__main__":
+    # Configuration
+    DATA_PATH = "pm_holdings.csv"
+    LAMBDA_VAR = 0.3
+    LAMBDA_SIG = 0.2
+    FOCUS_THRESHOLD = 0.6  # 60% exposure required to count as "current"
+    
+    # 1. Load data
+    df = pd.read_csv(DATA_PATH)
+    df, quant_cols = prepare_quantile_data(df)
+    
+    # 2. Infer current actions
+    current_actions = infer_current_actions(df, FOCUS_THRESHOLD)
+    
+    # 3. Calculate performance
+    performance_df = calculate_quantile_performance(df, quant_cols)
+    
+    # ... rest of the workflow remains the same ...
