@@ -1,0 +1,185 @@
+"""
+Factor Optimization with Quantile-Specific Recommendations
+Author: JP Morgan Asset Management Data Science Team
+Date: [Insert Date]
+"""
+
+import pandas as pd
+import numpy as np
+from scipy.optimize import milp, LinearConstraint, Bounds
+from sklearn.utils import resample
+from scipy import stats
+import plotly.express as px
+
+# ----------------------------
+# 1. Data Preparation
+# ----------------------------
+
+def prepare_quantile_data(df):
+    """Separate top/bottom quantile flags"""
+    quant_cols = [col for col in df.columns if '-quantile' in col]
+    
+    # Create separate flags for top/bottom
+    for col in quant_cols:
+        df[f'{col}_top'] = (df[col] == 'Q5').astype(int)
+        df[f'{col}_bottom'] = (df[col] == 'Q1').astype(int)
+    
+    return df, quant_cols
+
+# ----------------------------
+# 2. Quantile Performance Analysis
+# ----------------------------
+
+def calculate_quantile_performance(df, quant_cols, target_return='RETURN', n_boot=500):
+    """Calculate metrics for each quantile extreme"""
+    results = []
+    
+    for col in quant_cols:
+        # Analyze top quantile
+        top_df = df[df[f'{col}_top'] == 1]
+        top_metrics = _calculate_metrics(top_df, target_return, n_boot)
+        
+        # Analyze bottom quantile
+        bottom_df = df[df[f'{col}_bottom'] == 1]
+        bottom_metrics = _calculate_metrics(bottom_df, target_return, n_boot)
+        
+        results.append({
+            'factor': col.replace('-quantile', ''),
+            'top_return': top_metrics['mean'],
+            'top_var': top_metrics['var'],
+            'top_p': top_metrics['p_value'],
+            'bottom_return': bottom_metrics['mean'],
+            'bottom_var': bottom_metrics['var'],
+            'bottom_p': bottom_metrics['p_value']
+        })
+        
+    return pd.DataFrame(results)
+
+def _calculate_metrics(subset, target, n_boot):
+    """Helper function to calculate performance metrics"""
+    if len(subset) < 10:
+        return {'mean': np.nan, 'var': np.nan, 'p_value': np.nan}
+    
+    returns = subset[target]
+    boot_means = [resample(returns).mean() for _ in range(n_boot)]
+    _, p = stats.wilcoxon(returns - returns.mean())
+    
+    return {
+        'mean': returns.mean(),
+        'var': np.var(boot_means),
+        'p_value': p
+    }
+
+# ----------------------------
+# 3. Optimization Setup
+# ----------------------------
+
+def prepare_milp(performance_df, current_actions, lambda_var=0.3, lambda_sig=0.2):
+    """Prepare MILP problem with quantile-specific actions"""
+    # Initialize variables and scores
+    variables = []
+    scores = []
+    action_map = []
+    
+    for _, row in performance_df.iterrows():
+        factor = row['factor']
+        
+        # Top quantile actions
+        current_top = current_actions.get((factor, 'top'), 0)
+        score_top = _calculate_score(row, 'top', lambda_var, lambda_sig)
+        variables.append(('stop_top', factor, -score_top) if current_top else ('start_top', factor, score_top))
+        
+        # Bottom quantile actions
+        current_bottom = current_actions.get((factor, 'bottom'), 0)
+        score_bottom = _calculate_score(row, 'bottom', lambda_var, lambda_sig)
+        variables.append(('stop_bottom', factor, -score_bottom) if current_bottom else ('start_bottom', factor, score_bottom))
+    
+    # Extract coefficients and constraints
+    c = [var[2] for var in variables]
+    action_map = [var[:2] for var in variables]
+    
+    # Allow max 3 changes
+    constraints = LinearConstraint(np.ones(len(c)), lb=0, ub=3)
+    bounds = Bounds(0, 1)
+    integrality = np.ones(len(c))
+    
+    return c, constraints, bounds, integrality, action_map
+
+def _calculate_score(row, quant_type, lambda_var, lambda_sig):
+    """Calculate penalized score for a quantile type"""
+    return (row[f'{quant_type}_return'] 
+            - lambda_var * row[f'{quant_type}_var'] 
+            - lambda_sig * (1 - row[f'{quant_type}_p'] if row[f'{quant_type}_p'] >= 0.05 else 0))
+
+# ----------------------------
+# 4. Recommendation Engine
+# ----------------------------
+
+def generate_recommendations(solution, action_map):
+    """Convert MILP solution to human-readable changes"""
+    changes = []
+    for i, x in enumerate(solution.x):
+        if x > 0.5:
+            action_type, factor = action_map[i]
+            action = action_type.split('_')[0]
+            quantile = action_type.split('_')[1]
+            changes.append(f"{action.capitalize()} {factor} {quantile} quantile")
+    
+    return changes[:3]  # Return top 3 changes
+
+# ----------------------------
+# 5. Visualization
+# ----------------------------
+
+def plot_quantile_performance(performance_df):
+    """Interactive parallel coordinates plot"""
+    df = performance_df.melt(id_vars=['factor'], 
+                            value_vars=['top_return', 'bottom_return'],
+                            var_name='quantile', value_name='return')
+    
+    fig = px.scatter(df, x='factor', y='return', color='quantile',
+                     error_y=performance_df[['top_var', 'bottom_var']].melt()['value'],
+                     title="Quantile Performance with Variance Bounds")
+    fig.update_traces(marker=dict(size=12))
+    fig.show()
+
+# ----------------------------
+# 6. Main Workflow
+# ----------------------------
+
+if __name__ == "__main__":
+    # Configuration
+    DATA_PATH = "pm_holdings.csv"
+    CURRENT_ACTIONS = {  # Example current PM focus
+        ('factor_A', 'top'): 1,
+        ('factor_B', 'bottom'): 1
+    }
+    LAMBDA_VAR = 0.3
+    LAMBDA_SIG = 0.2
+    
+    # 1. Load and prepare data
+    df = pd.read_csv(DATA_PATH)
+    df, quant_cols = prepare_quantile_data(df)
+    
+    # 2. Calculate performance
+    performance_df = calculate_quantile_performance(df, quant_cols)
+    
+    # 3. Prepare optimization
+    c, constraints, bounds, integrality, action_map = prepare_milp(
+        performance_df.dropna(), CURRENT_ACTIONS, LAMBDA_VAR, LAMBDA_SIG
+    )
+    
+    # 4. Run optimization
+    result = milp(c=c, constraints=constraints, bounds=bounds, integrality=integrality)
+    
+    # 5. Generate and print recommendations
+    if result.success:
+        changes = generate_recommendations(result, action_map)
+        print("Top 3 Recommended Changes:")
+        for i, change in enumerate(changes, 1):
+            print(f"{i}. {change}")
+        
+        # 6. Visualize performance
+        plot_quantile_performance(performance_df)
+    else:
+        print("Optimization failed - check constraints or data quality")
