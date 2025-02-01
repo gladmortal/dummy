@@ -1,0 +1,283 @@
+import pandas as pd
+import numpy as np
+import pulp
+import plotly.express as px
+import plotly.graph_objects as go
+from tqdm import tqdm
+from sklearn.utils import resample
+from scipy.stats import ttest_ind
+
+# --------------------------
+# 1. Preprocessing Function
+# --------------------------
+def preprocess_data(df, return_col='normalized_return'):
+    """
+    Normalize returns to [-1, 1] and create binary flags for top and bottom quintiles.
+    
+    Parameters:
+        df (pd.DataFrame): Original DataFrame.
+        return_col (str): Column name for returns.
+    
+    Returns:
+        df (pd.DataFrame): Processed DataFrame.
+        quintile_cols (list): List of columns that contain quintile info.
+    """
+    df = df.copy()
+    
+    # Normalize returns to [-1, 1]
+    max_abs = df[return_col].abs().max()
+    df[return_col] = df[return_col] / (max_abs + 1e-8)
+    
+    # Identify columns with quintile information
+    quintile_cols = [col for col in df.columns if '-quintile' in col]
+    
+    # Create binary indicators for top and bottom quintiles
+    for col in quintile_cols:
+        df[f'{col}_is_top_quintile'] = np.where(df[col] == 5, 1, 0)
+        df[f'{col}_is_bottom_quintile'] = np.where(df[col] == 1, 1, 0)
+    
+    return df, quintile_cols
+
+# --------------------------
+# 2. Position-Specific Analysis with Bootstrap and Significance Penalization
+# --------------------------
+def calculate_bootstrap_impacts(df, quintile_cols, position='long', n_bootstrap=500, penalty_weight=0.3, significance_weight=0.5):
+    """
+    Calculate impact scores with bootstrap variance-based penalty and add a significance penalty.
+    
+    Parameters:
+        df (pd.DataFrame): Preprocessed DataFrame.
+        quintile_cols (list): List of factor quintile columns.
+        position (str): 'long' or 'short'.
+        n_bootstrap (int): Number of bootstrap samples.
+        penalty_weight (float): Weight for bootstrap variance penalty.
+        significance_weight (float): Weight for significance penalty.
+    
+    Returns:
+        pd.DataFrame: DataFrame with impact statistics for each factor.
+    """
+    subset = df[df['position_type'] == position].copy()
+    impacts = []
+    
+    for col in tqdm(quintile_cols, desc=f"Bootstrapping {position} factors"):
+        # Define column names for binary indicators
+        top_flag = f'{col}_is_top_quintile'
+        bottom_flag = f'{col}_is_bottom_quintile'
+        
+        # Filter episodes into groups
+        top_group = subset[subset[top_flag] == 1]['normalized_return']
+        bottom_group = subset[subset[bottom_flag] == 1]['normalized_return']
+        others_group = subset[(subset[top_flag] == 0) & (subset[bottom_flag] == 0)]['normalized_return']
+        
+        # Initialize lists for bootstrap samples
+        top_impacts = []
+        bottom_impacts = []
+        
+        for _ in range(n_bootstrap):
+            top_sample = resample(top_group, replace=True) if len(top_group) > 0 else pd.Series([])
+            bottom_sample = resample(bottom_group, replace=True) if len(bottom_group) > 0 else pd.Series([])
+            others_sample = resample(others_group, replace=True)
+            
+            if len(top_sample) > 0:
+                top_impacts.append(top_sample.mean() - others_sample.mean())
+            if len(bottom_sample) > 0:
+                bottom_impacts.append(bottom_sample.mean() - others_sample.mean())
+        
+        # Calculate raw impact differences
+        top_mean_diff = top_group.mean() - others_group.mean() if len(top_group) > 0 else 0
+        bottom_mean_diff = bottom_group.mean() - others_group.mean() if len(bottom_group) > 0 else 0
+        
+        # Calculate bootstrap variance
+        top_bootstrap_var = np.var(top_impacts) if len(top_impacts) > 0 else 0
+        bottom_bootstrap_var = np.var(bottom_impacts) if len(bottom_impacts) > 0 else 0
+        
+        # Adjust impacts based on bootstrap variance penalty
+        top_adjusted_diff = top_mean_diff * (1 - penalty_weight * top_bootstrap_var)
+        bottom_adjusted_diff = bottom_mean_diff * (1 - penalty_weight * bottom_bootstrap_var)
+        
+        # --- Significance Testing and Penalization ---
+        # Here we use a t-test as an example to gauge significance.
+        # You might decide on a threshold p-value below which you do not penalize.
+        if len(top_group) > 0 and len(others_group) > 0:
+            t_stat_top, p_value_top = ttest_ind(top_group, others_group, equal_var=False)
+        else:
+            p_value_top = 1  # non-significant if data is missing
+        
+        if len(bottom_group) > 0 and len(others_group) > 0:
+            t_stat_bottom, p_value_bottom = ttest_ind(bottom_group, others_group, equal_var=False)
+        else:
+            p_value_bottom = 1
+        
+        # Penalize impact based on p-value (e.g., larger p-value => more penalty)
+        # Here, we assume that a p-value close to 0 is desirable.
+        top_significance_penalty = significance_weight * p_value_top
+        bottom_significance_penalty = significance_weight * p_value_bottom
+        
+        top_adjusted_diff = top_adjusted_diff * (1 - top_significance_penalty)
+        bottom_adjusted_diff = bottom_adjusted_diff * (1 - bottom_significance_penalty)
+        
+        # Prevalence can be interpreted as the proportion of episodes in the group
+        top_prevalence = top_group.count() / subset.shape[0] if subset.shape[0] > 0 else 0
+        bottom_prevalence = bottom_group.count() / subset.shape[0] if subset.shape[0] > 0 else 0
+        
+        impacts.append({
+            'factor': col,
+            'position': position,
+            'top_mean_diff': top_mean_diff,
+            'top_adjusted_diff': top_adjusted_diff,
+            'top_bootstrap_variance': top_bootstrap_var,
+            'top_p_value': p_value_top,
+            'bottom_mean_diff': bottom_mean_diff,
+            'bottom_adjusted_diff': bottom_adjusted_diff,
+            'bottom_bootstrap_variance': bottom_bootstrap_var,
+            'bottom_p_value': p_value_bottom,
+            'top_prevalence': top_prevalence,
+            'bottom_prevalence': bottom_prevalence
+        })
+    
+    return pd.DataFrame(impacts)
+
+# --------------------------
+# 3. Constrained Optimizer with Penalization
+# --------------------------
+def build_optimizer_with_penalization(impact_df, prevalence_threshold=0.1, max_changes=3):
+    """
+    Build and solve an MILP model to select factors based on adjusted impact,
+    with constraints on the number of changes and overall prevalence.
+    
+    Parameters:
+        impact_df (pd.DataFrame): DataFrame with impact statistics.
+        prevalence_threshold (float): Maximum allowed sum of prevalences for selected changes.
+        max_changes (int): Maximum number of factors to change.
+    
+    Returns:
+        list: Sorted list of selected changes with details.
+    """
+    prob = pulp.LpProblem('Portfolio_Optimization', pulp.LpMaximize)
+    factors = impact_df['factor'].unique()
+    
+    # Decision variables: use more descriptive names
+    activate_top = pulp.LpVariable.dicts('activate_top_exposure', factors, cat='Binary')
+    activate_bottom = pulp.LpVariable.dicts('activate_bottom_exposure', factors, cat='Binary')
+    
+    # Objective: maximize the sum of adjusted impacts
+    prob += pulp.lpSum([
+        impact_df.loc[impact_df['factor'] == f, 'top_adjusted_diff'].values[0] * activate_top[f] +
+        impact_df.loc[impact_df['factor'] == f, 'bottom_adjusted_diff'].values[0] * activate_bottom[f]
+        for f in factors
+    ])
+    
+    # Constraints
+    for f in factors:
+        # Ensure that for each factor, at most one action is selected
+        prob += activate_top[f] + activate_bottom[f] <= 1, f"MutualExclusivity_{f}"
+    
+    # Total number of factor changes should not exceed max_changes
+    prob += pulp.lpSum([activate_top[f] + activate_bottom[f] for f in factors]) <= max_changes, "TotalChangesLimit"
+    
+    # Constraint on the sum of prevalences of the chosen factors
+    prob += pulp.lpSum([
+        impact_df.loc[impact_df['factor'] == f, 'top_prevalence'].values[0] * activate_top[f] +
+        impact_df.loc[impact_df['factor'] == f, 'bottom_prevalence'].values[0] * activate_bottom[f]
+        for f in factors
+    ]) <= prevalence_threshold, "PrevalenceThreshold"
+    
+    # Solve the MILP model
+    prob.solve(pulp.PULP_CBC_CMD(msg=False))
+    
+    # Extract selected changes
+    selected_changes = []
+    for f in factors:
+        if activate_top[f].value() == 1:
+            selected_changes.append({
+                'factor': f,
+                'action': 'top',
+                'adjusted_diff': impact_df.loc[impact_df['factor'] == f, 'top_adjusted_diff'].values[0],
+                'bootstrap_variance': impact_df.loc[impact_df['factor'] == f, 'top_bootstrap_variance'].values[0],
+                'p_value': impact_df.loc[impact_df['factor'] == f, 'top_p_value'].values[0],
+                'prevalence': impact_df.loc[impact_df['factor'] == f, 'top_prevalence'].values[0]
+            })
+        elif activate_bottom[f].value() == 1:
+            selected_changes.append({
+                'factor': f,
+                'action': 'bottom',
+                'adjusted_diff': impact_df.loc[impact_df['factor'] == f, 'bottom_adjusted_diff'].values[0],
+                'bootstrap_variance': impact_df.loc[impact_df['factor'] == f, 'bottom_bootstrap_variance'].values[0],
+                'p_value': impact_df.loc[impact_df['factor'] == f, 'bottom_p_value'].values[0],
+                'prevalence': impact_df.loc[impact_df['factor'] == f, 'bottom_prevalence'].values[0]
+            })
+    
+    # Sort by absolute adjusted impact in descending order and limit to max_changes
+    return sorted(selected_changes, key=lambda x: abs(x['adjusted_diff']), reverse=True)[:max_changes]
+
+# --------------------------
+# 4. Enhanced Visualizations
+# --------------------------
+def plot_impact_variance_tradeoff(impact_df, selected_changes):
+    """
+    Create an interactive scatter plot of adjusted impact vs. bootstrap variance.
+    
+    Parameters:
+        impact_df (pd.DataFrame): DataFrame with impact details.
+        selected_changes (list): List of selected factors from the optimizer.
+    """
+    # Prepare a DataFrame for both top and bottom actions
+    plot_data = []
+    for _, row in impact_df.iterrows():
+        # Top action data
+        plot_data.append({
+            'factor': row['factor'],
+            'action': 'top',
+            'adjusted_diff': row['top_adjusted_diff'],
+            'bootstrap_variance': row['top_bootstrap_variance'],
+            'prevalence': row['top_prevalence']
+        })
+        # Bottom action data
+        plot_data.append({
+            'factor': row['factor'],
+            'action': 'bottom',
+            'adjusted_diff': row['bottom_adjusted_diff'],
+            'bootstrap_variance': row['bottom_bootstrap_variance'],
+            'prevalence': row['bottom_prevalence']
+        })
+    plot_df = pd.DataFrame(plot_data)
+    
+    # Mark the selected factors
+    selected_factors = [change['factor'] for change in selected_changes]
+    plot_df['selection_status'] = np.where(plot_df['factor'].isin(selected_factors), 'Selected', 'Not Selected')
+    
+    fig = px.scatter(
+        plot_df,
+        x='adjusted_diff',
+        y='bootstrap_variance',
+        color='selection_status',
+        size='prevalence',
+        hover_name='factor',
+        facet_col='action',
+        title="Adjusted Impact vs. Bootstrap Variance Tradeoff",
+        labels={'adjusted_diff': 'Adjusted Impact Difference', 'bootstrap_variance': 'Bootstrap Variance'}
+    )
+    fig.show()
+    
+    # Additional plot: Histogram of p-values for diagnostic
+    fig_hist = px.histogram(plot_df, x='bootstrap_variance', nbins=30, title='Distribution of Bootstrap Variances')
+    fig_hist.show()
+
+# --------------------------
+# 5. Usage Workflow Example
+# --------------------------
+# Example usage (uncomment and modify file paths as needed):
+# df = pd.read_csv('portfolio_data.csv')
+# processed_df, quintile_columns = preprocess_data(df)
+#
+# # For long positions analysis
+# long_impacts_df = calculate_bootstrap_impacts(processed_df, quintile_columns, position='long')
+# selected_long_changes = build_optimizer_with_penalization(long_impacts_df, prevalence_threshold=0.1, max_changes=3)
+#
+# # Visualize the results
+# plot_impact_variance_tradeoff(long_impacts_df, selected_long_changes)
+#
+# # Optionally, print the selected changes for further review
+# print("Selected changes for long positions:")
+# for change in selected_long_changes:
+#     print(change)
