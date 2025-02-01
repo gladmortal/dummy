@@ -1,0 +1,162 @@
+import pandas as pd
+import numpy as np
+import pulp
+import plotly.express as px
+from datetime import datetime
+from tqdm import tqdm
+
+# --------------------------
+# 1. Enhanced Preprocessing with Date Handling
+# --------------------------
+def preprocess_data(df, return_col='normalized_return', recency_threshold=5):
+    """Convert dates, normalize returns, and compute recency features"""
+    df = df.copy()
+    
+    # Convert start_date to datetime and extract year
+    df['start_date'] = pd.to_datetime(df['start_date'], format='%d-%m-%Y')
+    df['year'] = df['start_date'].dt.year
+    
+    # Normalize returns to [-1, 1]
+    max_abs = df[return_col].abs().max()
+    df[return_col] = df[return_col] / (max_abs + 1e-8)
+    
+    # Create quintile binaries and recency features
+    quintile_cols = [col for col in df.columns if '-quintile' in col]
+    current_year = df['year'].max()
+    
+    for col in quintile_cols:
+        # Create top/bottom binaries
+        df[f'{col}_top'] = np.where(df[col] == 5, 1, 0)
+        df[f'{col}_bottom'] = np.where(df[col] == 1, 1, 0)
+        
+        # Calculate most recent usage year for each quintile
+        top_last_used = df.loc[df[f'{col}_top'] == 1, 'year'].max() if df[f'{col}_top'].sum() > 0 else -np.inf
+        bottom_last_used = df.loc[df[f'{col}_bottom'] == 1, 'year'].max() if df[f'{col}_bottom'].sum() > 0 else -np.inf
+        
+        # Create eligibility flags based on recency
+        df[f'{col}_top_eligible'] = np.where(
+            (current_year - top_last_used) <= recency_threshold, 1, 0
+        )
+        df[f'{col}_bottom_eligible'] = np.where(
+            (current_year - bottom_last_used) <= recency_threshold, 1, 0
+        )
+    
+    return df, quintile_cols
+
+# --------------------------
+# 2. Position-Specific Analysis
+# --------------------------
+def analyze_position_type(df, position='long'):
+    """Filter and calculate metrics for specific position type"""
+    subset = df[df['position_type'] == position].copy()
+    
+    # Calculate prevalence (exclude ineligible factors)
+    quintile_cols = [col for col in df.columns if '-quintile' in col]
+    prevalence = {}
+    
+    for col in quintile_cols:
+        eligible_top = subset[f'{col}_top_eligible'].sum()
+        eligible_bottom = subset[f'{col}_bottom_eligible'].sum()
+        total = subset[col].notna().sum()
+        
+        prevalence[f'{col}_top'] = eligible_top / total if total > 0 else 0
+        prevalence[f'{col}_bottom'] = eligible_bottom / total if total > 0 else 0
+    
+    return subset, prevalence
+
+# --------------------------
+# 3. Constrained Optimizer with Date Awareness
+# --------------------------
+def build_recency_optimizer(df, position_type, prevalence_threshold=0.1, 
+                           max_changes=3, recency_threshold=5):
+    """MILP model with recency and prevalence constraints"""
+    prob = pulp.LpProblem(f'Portfolio_Optimization_{position_type}', pulp.LpMaximize)
+    quintile_cols = [col for col in df.columns if '-quintile' in col]
+    
+    # Decision variables (only for eligible factors)
+    switch_top = {}
+    switch_bottom = {}
+    for col in quintile_cols:
+        if df[f'{col}_top_eligible'].any():
+            switch_top[col] = pulp.LpVariable(f'top_{col}', cat='Binary')
+        if df[f'{col}_bottom_eligible'].any():
+            switch_bottom[col] = pulp.LpVariable(f'bottom_{col}', cat='Binary')
+    
+    # Objective: Maximize impact (using simplified mean return)
+    prob += pulp.lpSum([
+        df[df[f'{col}_top'] == 1]['normalized_return'].mean() * switch_top.get(col, 0) +
+        df[df[f'{col}_bottom'] == 1]['normalized_return'].mean() * switch_bottom.get(col, 0)
+        for col in quintile_cols
+    ])
+    
+    # Constraints
+    # 1. Max changes allowed
+    prob += pulp.lpSum([switch_top.get(col, 0) + switch_bottom.get(col, 0) 
+                       for col in quintile_cols]) <= max_changes
+    
+    # 2. Prevalence threshold
+    prob += pulp.lpSum([
+        (df[f'{col}_top'].mean() * switch_top.get(col, 0)) +
+        (df[f'{col}_bottom'].mean() * switch_bottom.get(col, 0))
+        for col in quintile_cols
+    ]) <= prevalence_threshold
+    
+    # 3. Recency eligibility (enforced through variable creation)
+    
+    # Solve
+    prob.solve(pulp.PULP_CBC_CMD(msg=False))
+    
+    # Extract results
+    changes = []
+    for col in quintile_cols:
+        if switch_top.get(col, None) and switch_top[col].value() == 1:
+            changes.append({
+                'factor': col,
+                'action': 'top',
+                'impact': df[df[f'{col}_top'] == 1]['normalized_return'].mean(),
+                'prevalence': df[f'{col}_top'].mean(),
+                'last_used': df.loc[df[f'{col}_top'] == 1, 'year'].max()
+            })
+        if switch_bottom.get(col, None) and switch_bottom[col].value() == 1:
+            changes.append({
+                'factor': col,
+                'action': 'bottom',
+                'impact': df[df[f'{col}_bottom'] == 1]['normalized_return'].mean(),
+                'prevalence': df[f'{col}_bottom'].mean(),
+                'last_used': df.loc[df[f'{col}_bottom'] == 1, 'year'].max()
+            })
+    
+    return sorted(changes, key=lambda x: x['impact'], reverse=True)[:max_changes]
+
+# --------------------------
+# 4. Visualization
+# --------------------------
+def plot_recency_impact(changes, recency_threshold):
+    """Interactive plot showing recency vs impact"""
+    df = pd.DataFrame(changes)
+    fig = px.scatter(
+        df,
+        x='last_used',
+        y='impact',
+        color='action',
+        size='prevalence',
+        hover_name='factor',
+        title=f"Recency vs Impact (Threshold: {recency_threshold} years)",
+        labels={'last_used': 'Most Recent Usage Year'}
+    )
+    fig.add_vline(x=df['last_used'].max() - recency_threshold, 
+                 line_dash="dash", annotation_text="Recency Cutoff")
+    fig.show()
+
+# --------------------------
+# Usage Workflow
+# --------------------------
+# df = pd.read_csv('portfolio_data.csv')
+# processed_df, quintile_cols = preprocess_data(df, recency_threshold=10)
+
+# For long positions
+# long_data, long_prevalence = analyze_position_type(processed_df, 'long')
+# long_changes = build_recency_optimizer(long_data, 'long', prevalence_threshold=0.1)
+# plot_recency_impact(long_changes, recency_threshold=10)
+
+# For short positions (repeat similarly)
