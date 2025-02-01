@@ -1,0 +1,153 @@
+import pandas as pd
+import numpy as np
+import pulp
+import plotly.express as px
+import plotly.graph_objects as go
+from tqdm import tqdm
+
+# --------------------------
+# 1. Preprocessing Functions
+# --------------------------
+def preprocess_data(df, return_col='normalized_return'):
+    """Normalize returns to [-1, 1] and create quintile binaries"""
+    df = df.copy()
+    
+    # Normalize returns
+    max_abs = df[return_col].abs().max()
+    df[return_col] = df[return_col] / (max_abs + 1e-8)  # Prevent division by zero
+    
+    # Create quintile binaries (adjust quintile thresholds as needed)
+    quintile_cols = [col for col in df.columns if '-quintile' in col]
+    for col in quintile_cols:
+        df[f'{col}_top'] = np.where(df[col] == 5, 1, 0)
+        df[f'{col}_bottom'] = np.where(df[col] == 1, 1, 0)
+    
+    return df, quintile_cols
+
+# --------------------------
+# 2. Impact Calculation with Bootstrap
+# --------------------------
+def calculate_bootstrap_impacts(df, quintile_cols, return_col='normalized_return', 
+                               n_bootstrap=1000, penalty_weight=0.3, random_seed=42):
+    """Calculate impact scores with variance-based penalty"""
+    np.random.seed(random_seed)
+    impact_data = []
+    
+    for col in tqdm(quintile_cols, desc="Bootstrapping factors"):
+        # Raw impact calculations
+        top_group = df[df[f'{col}_top'] == 1][return_col]
+        bottom_group = df[df[f'{col}_bottom'] == 1][return_col]
+        others = df[(df[f'{col}_top'] == 0) & (df[f'{col}_bottom'] == 0)][return_col]
+        
+        # Bootstrap variance estimation
+        top_impacts, bottom_impacts = [], []
+        for _ in range(n_bootstrap):
+            # Sample with replacement
+            top_sample = np.random.choice(top_group, size=len(top_group), replace=True)
+            bottom_sample = np.random.choice(bottom_group, size=len(bottom_group), replace=True)
+            others_sample = np.random.choice(others, size=len(others), replace=True)
+            
+            top_impacts.append(top_sample.mean() - others_sample.mean())
+            bottom_impacts.append(bottom_sample.mean() - others_sample.mean())
+        
+        # Calculate adjusted impacts
+        top_raw = top_group.mean() - others.mean()
+        top_var = np.nanvar(top_impacts)
+        top_adj = top_raw * (1 - penalty_weight * top_var)
+        
+        bottom_raw = bottom_group.mean() - others.mean()
+        bottom_var = np.nanvar(bottom_impacts)
+        bottom_adj = bottom_raw * (1 - penalty_weight * bottom_var)
+        
+        impact_data.append({
+            'factor': col,
+            'top_raw': top_raw,
+            'top_adj': top_adj,
+            'top_var': top_var,
+            'bottom_raw': bottom_raw,
+            'bottom_adj': bottom_adj,
+            'bottom_var': bottom_var
+        })
+    
+    return pd.DataFrame(impact_data)
+
+# --------------------------
+# 3. Optimization Model
+# --------------------------
+def build_optimization_model(impact_df, max_changes=3):
+    """Build and solve MILP model"""
+    prob = pulp.LpProblem('Portfolio_Optimization', pulp.LpMaximize)
+    factors = impact_df['factor'].tolist()
+    
+    # Decision variables
+    switch_top = pulp.LpVariable.dicts('top', factors, cat='Binary')
+    switch_bottom = pulp.LpVariable.dicts('bottom', factors, cat='Binary')
+    
+    # Objective function
+    prob += pulp.lpSum([
+        impact_df.loc[impact_df['factor']==f, 'top_adj'].values[0] * switch_top[f] +
+        impact_df.loc[impact_df['factor']==f, 'bottom_adj'].values[0] * switch_bottom[f]
+        for f in factors
+    ])
+    
+    # Constraints
+    for f in factors:
+        prob += switch_top[f] + switch_bottom[f] <= 1  # Mutual exclusivity
+        
+    prob += pulp.lpSum([switch_top[f] + switch_bottom[f] for f in factors]) <= max_changes
+    
+    # Solve
+    prob.solve(pulp.PULP_CBC_CMD(msg=False))
+    
+    # Extract results
+    changes = []
+    for f in factors:
+        if switch_top[f].value() == 1:
+            changes.append((f, 'top', impact_df.loc[impact_df['factor']==f, 'top_adj'].values[0]))
+        elif switch_bottom[f].value() == 1:
+            changes.append((f, 'bottom', impact_df.loc[impact_df['factor']==f, 'bottom_adj'].values[0]))
+    
+    return sorted(changes, key=lambda x: abs(x[2]), reverse=True)[:max_changes]
+
+# --------------------------
+# 4. Visualization Functions
+# --------------------------
+def plot_impact_variance(impact_df, changes):
+    """Interactive scatter plot of impact vs variance"""
+    fig = px.scatter(
+        impact_df,
+        x='top_adj',
+        y='top_var',
+        color=np.where(impact_df['factor'].isin([c[0] for c in changes]), 'Selected', 'Others'),
+        size=np.abs(impact_df['top_raw']),
+        hover_name='factor',
+        title="Impact vs Variance (Top Quintile)"
+    )
+    fig.update_layout(xaxis_title="Adjusted Impact", yaxis_title="Bootstrap Variance")
+    fig.show()
+
+def plot_factor_comparison(changes):
+    """Bar plot of selected factors"""
+    df = pd.DataFrame(changes, columns=['factor', 'action', 'impact'])
+    fig = px.bar(
+        df,
+        x='factor',
+        y='impact',
+        color='action',
+        title="Top Recommended Changes",
+        labels={'impact': 'Adjusted Impact Score'}
+    )
+    fig.show()
+
+# --------------------------
+# 5. Main Workflow
+# --------------------------
+# Load data (replace with actual data path)
+# df = pd.read_csv('portfolio_data.csv')
+# processed_df, quintile_cols = preprocess_data(df)
+
+# Example workflow (uncomment to use):
+# impact_df = calculate_bootstrap_impacts(processed_df, quintile_cols)
+# changes = build_optimization_model(impact_df)
+# plot_impact_variance(impact_df, changes)
+# plot_factor_comparison(changes)
