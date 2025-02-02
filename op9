@@ -1,0 +1,55 @@
+    df[f'{return_col}_per_day'] = df[return_col] / df['duration_days']
+    df[f'{impact_col}_per_day'] = df[impact_col] / df['duration_days']
+    
+    # Scale returns and impact to [-1, 1]
+    scaler = MinMaxScaler(feature_range=(-1, 1))
+    df[[f'{return_col}_scaled', f'{impact_col}_scaled']] = scaler.fit_transform(
+        df[[f'{return_col}_per_day', f'{impact_col}_per_day']]
+    )
+
+
+
+
+
+# --------------------------
+# 2. Position-Specific Analysis with Bootstrap
+# --------------------------
+def calculate_bootstrap_impacts(df, quintile_cols, position='long', n_bootstrap=500, penalty_weight=0.3):
+    """Calculate impact scores with bootstrap variance-based penalty"""
+    subset = df[df['position_type'] == position].copy()
+    impacts = []
+    
+    for col in tqdm(quintile_cols, desc=f"Bootstrapping {position} factors"):
+        # Filter episodes
+        top_group = subset[subset[f'{col}_is_top_quintile'] == 1]['normalized_return_scaled']
+        bottom_group = subset[subset[f'{col}_is_bottom_quintile'] == 1]['normalized_return_scaled']
+        
+        # Bootstrap sampling
+        top_impacts, bottom_impacts = [], []
+        for _ in range(n_bootstrap):
+            top_sample = resample(top_group, replace=True) if len(top_group) > 0 else []
+            bottom_sample = resample(bottom_group, replace=True) if len(bottom_group) > 0 else []
+            
+            if len(top_sample) > 0 and len(bottom_sample) > 0:
+                top_impacts.append(top_sample.mean())
+                bottom_impacts.append(bottom_sample.mean())
+        
+        # Calculate adjusted impacts with variance penalty
+        if len(top_impacts) > 0 and len(bottom_impacts) > 0:
+            mean_diff = np.mean(top_impacts) - np.mean(bottom_impacts)
+            var_diff = np.var(top_impacts) + np.var(bottom_impacts)
+            adjusted_score = mean_diff * (1 - penalty_weight * var_diff)
+        else:
+            mean_diff, var_diff, adjusted_score = 0, 0, 0
+        
+        impacts.append({
+            'factor': col,
+            'position': position,
+            'mean_difference': mean_diff,
+            'adjusted_score': adjusted_score,
+            'bootstrap_variance': var_diff,
+            'top_prevalence': top_group.mean() if len(top_group) > 0 else 0,
+            'bottom_prevalence': bottom_group.mean() if len(bottom_group) > 0 else 0
+        })
+    
+    return pd.DataFrame(impacts)
