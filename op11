@@ -1,0 +1,280 @@
+import pandas as pd
+import numpy as np
+import pulp
+import plotly.express as px
+import plotly.graph_objects as go
+from sklearn.utils import resample
+from sklearn.preprocessing import MinMaxScaler
+from tqdm import tqdm
+from scipy.stats import percentileofscore
+
+# ======================
+# 1. DATA PREPROCESSING
+# ======================
+def preprocess_data(df, return_col='normalized_return'):
+    """Normalize returns, create quintile binaries, and engineer features"""
+    df = df.copy()
+    
+    # Temporal features
+    df['start_date'] = pd.to_datetime(df['start_date'], format='%d-%m-%Y')
+    df['end_date'] = pd.to_datetime(df['end_date'], format='%d-%m-%Y')
+    df['holding_period'] = (df['end_date'] - df['start_date']).dt.days + 1
+    
+    # Advanced normalization
+    df['return_per_day'] = df[return_col] / df['holding_period']
+    scaler = MinMaxScaler(feature_range=(-1, 1))
+    df['return_scaled'] = scaler.fit_transform(df[['return_per_day']])
+    
+    # Quintile processing
+    quintile_cols = [col for col in df.columns if '-quintile' in col]
+    for col in quintile_cols:
+        df[f'{col}_top'] = (df[col] == 5).astype(int)
+        df[f'{col}_bottom'] = (df[col] == 1).astype(int)
+        df[f'{col}_middle'] = ((df[col] > 1) & (df[col] < 5)).astype(int)
+    
+    return df, quintile_cols
+
+# ==============================
+# 2. BOOTSTRAP IMPACT ANALYSIS
+# ==============================
+def calculate_bootstrap_impacts(df, quintile_cols, position='long', 
+                               n_bootstrap=500, penalty_weight=0.3):
+    """Calculate factor impacts with bootstrap significance testing"""
+    subset = df[df['position_type'] == position].copy()
+    impacts = []
+    
+    for col in tqdm(quintile_cols, desc=f"Analyzing {position} factors"):
+        # Groups
+        top = subset[subset[f'{col}_top'] == 1]
+        bottom = subset[subset[f'{col}_bottom'] == 1]
+        middle = subset[subset[f'{col}_middle'] == 1]
+        
+        # Bootstrap storage
+        top_impacts, bottom_impacts = [], []
+        
+        # Significance testing
+        def bootstrap_iteration():
+            top_sample = resample(top['return_scaled'], replace=True) if len(top) > 0 else []
+            bottom_sample = resample(bottom['return_scaled'], replace=True) if len(bottom) > 0 else []
+            middle_sample = resample(middle['return_scaled'], replace=True)
+            return (
+                np.mean(top_sample) - np.mean(middle_sample) if len(top_sample) > 0 else 0,
+                np.mean(bottom_sample) - np.mean(middle_sample) if len(bottom_sample) > 0 else 0
+            )
+        
+        # Parallel bootstrap
+        results = [bootstrap_iteration() for _ in range(n_bootstrap)]
+        top_impacts, bottom_impacts = zip(*results)
+        
+        # Calculate metrics
+        top_mean = np.mean(top_impacts)
+        bottom_mean = np.mean(bottom_impacts)
+        top_var = np.var(top_impacts)
+        bottom_var = np.var(bottom_impacts)
+        
+        # Empirical p-values
+        pval_top = 1 - percentileofscore(top_impacts, top_mean)/100
+        pval_bottom = 1 - percentileofscore(bottom_impacts, bottom_mean)/100
+        
+        # Prevalence calculation
+        prevalence_top = len(top) / len(subset)
+        prevalence_bottom = len(bottom) / len(subset)
+        
+        # Adjusted impacts with penalties
+        top_adj = top_mean * (1 - penalty_weight * top_var) * (1 - np.sqrt(prevalence_top)) * (-np.log(pval_top + 1e-10))
+        bottom_adj = bottom_mean * (1 - penalty_weight * bottom_var) * (1 - np.sqrt(prevalence_bottom)) * (-np.log(pval_bottom + 1e-10))
+        
+        impacts.append({
+            'factor': col,
+            'position': position,
+            'top_adj_impact': top_adj,
+            'bottom_adj_impact': bottom_adj,
+            'top_pvalue': pval_top,
+            'bottom_pvalue': pval_bottom,
+            'top_prevalence': prevalence_top,
+            'bottom_prevalence': prevalence_bottom,
+            'top_var': top_var,
+            'bottom_var': bottom_var
+        })
+    
+    return pd.DataFrame(impacts)
+
+# ======================
+# 3. OPTIMIZATION MODEL
+# ======================
+def build_optimizer(impact_df, prevalence_threshold=0.1, max_changes=3):
+    """MILP model with bootstrap significance and prevalence penalties"""
+    prob = pulp.LpProblem('Portfolio_Optimization', pulp.LpMaximize)
+    factors = impact_df['factor'].unique()
+    
+    # Decision variables
+    switch_top = pulp.LpVariable.dicts('switch_top', factors, cat='Binary')
+    switch_bottom = pulp.LpVariable.dicts('switch_bottom', factors, cat='Binary')
+    
+    # Objective function with penalties
+    prob += pulp.lpSum([
+        impact_df.loc[impact_df['factor'] == f, 'top_adj_impact'].values[0] * switch_top[f] +
+        impact_df.loc[impact_df['factor'] == f, 'bottom_adj_impact'].values[0] * switch_bottom[f]
+        for f in factors
+    ])
+    
+    # Constraints
+    for f in factors:
+        prob += switch_top[f] + switch_bottom[f] <= 1  # Mutual exclusivity
+    
+    prob += pulp.lpSum([switch_top[f] + switch_bottom[f] for f in factors]) <= max_changes
+    
+    # Prevalence constraint
+    prob += pulp.lpSum([
+        (impact_df.loc[impact_df['factor'] == f, 'top_prevalence'].values[0] * switch_top[f] +
+         impact_df.loc[impact_df['factor'] == f, 'bottom_prevalence'].values[0] * switch_bottom[f])
+        for f in factors
+    ]) <= prevalence_threshold
+    
+    # Solve
+    prob.solve(pulp.PULP_CBC_CMD(msg=False))
+    
+    # Extract results
+    changes = []
+    for f in factors:
+        if switch_top[f].value() == 1:
+            changes.append({
+                'factor': f,
+                'action': 'top',
+                'impact': impact_df.loc[impact_df['factor'] == f, 'top_adj_impact'].values[0],
+                'prevalence': impact_df.loc[impact_df['factor'] == f, 'top_prevalence'].values[0],
+                'pvalue': impact_df.loc[impact_df['factor'] == f, 'top_pvalue'].values[0]
+            })
+        elif switch_bottom[f].value() == 1:
+            changes.append({
+                'factor': f,
+                'action': 'bottom',
+                'impact': impact_df.loc[impact_df['factor'] == f, 'bottom_adj_impact'].values[0],
+                'prevalence': impact_df.loc[impact_df['factor'] == f, 'bottom_prevalence'].values[0],
+                'pvalue': impact_df.loc[impact_df['factor'] == f, 'bottom_pvalue'].values[0]
+            })
+    
+    return sorted(changes, key=lambda x: abs(x['impact']), reverse=True)[:max_changes]
+
+# ======================
+# 4. VISUALIZATIONS
+# ======================
+def plot_3d_factor_landscape(impact_df):
+    """Interactive 3D visualization of factor characteristics"""
+    df = impact_df.melt(id_vars=['factor', 'position'], 
+                       value_vars=['top_adj_impact', 'bottom_adj_impact'],
+                       var_name='action', value_name='impact')
+    
+    df['variance'] = np.where(df['action'] == 'top_adj_impact', 
+                            impact_df['top_var'], impact_df['bottom_var'])
+    df['prevalence'] = np.where(df['action'] == 'top_adj_impact', 
+                              impact_df['top_prevalence'], impact_df['bottom_prevalence'])
+    df['pvalue'] = np.where(df['action'] == 'top_adj_impact', 
+                          impact_df['top_pvalue'], impact_df['bottom_pvalue'])
+    
+    fig = px.scatter_3d(
+        df,
+        x='impact',
+        y='variance',
+        z='prevalence',
+        color='pvalue',
+        symbol='action',
+        hover_name='factor',
+        title='3D Factor Landscape',
+        labels={'impact': 'Adjusted Impact', 'variance': 'Bootstrap Variance', 
+                'prevalence': 'Factor Prevalence', 'pvalue': 'P-value'}
+    )
+    fig.update_traces(marker=dict(size=5))
+    fig.show()
+
+def plot_penalty_sensitivity(impact_df, penalty_range=np.linspace(0, 1, 11)):
+    """Heatmap showing factor selection sensitivity to penalty weights"""
+    sensitivity_data = []
+    
+    for penalty in penalty_range:
+        # Adjust impacts with current penalty
+        impact_df['temp_top'] = impact_df['top_adj_impact'] * (1 - penalty * impact_df['top_var'])
+        impact_df['temp_bottom'] = impact_df['bottom_adj_impact'] * (1 - penalty * impact_df['bottom_var'])
+        
+        # Get top 3 factors
+        top_factors = impact_df[['factor', 'temp_top', 'temp_bottom']].melt(id_vars=['factor'])
+        top_factors = top_factors.nlargest(3, 'value')['factor'].unique()
+        
+        for factor in top_factors:
+            sensitivity_data.append({'penalty_weight': penalty, 'factor': factor})
+    
+    sensitivity_df = pd.DataFrame(sensitivity_data)
+    fig = px.density_heatmap(
+        sensitivity_df,
+        x='penalty_weight',
+        y='factor',
+        title='Penalty Weight Sensitivity',
+        labels={'penalty_weight': 'Variance Penalty Weight'}
+    )
+    fig.show()
+
+def plot_factor_timeline(df, factor):
+    """Temporal evolution of factor performance"""
+    df = df.sort_values('start_date').copy()
+    df['rolling_impact'] = df.groupby(factor)['return_scaled'].transform(
+        lambda x: x.rolling(window=12, min_periods=1).mean()
+    )
+    
+    fig = px.line(
+        df,
+        x='start_date',
+        y='rolling_impact',
+        color=factor,
+        title=f'12-Month Rolling Impact: {factor}',
+        labels={'rolling_impact': 'Normalized Return', 'start_date': 'Date'}
+    )
+    fig.show()
+
+def plot_quintile_distribution(df, factor):
+    """Comparative distribution analysis across quintiles"""
+    fig = px.box(
+        df,
+        x=factor,
+        y='return_scaled',
+        color=factor,
+        points='all',
+        title=f'Return Distribution by Quintile: {factor}'
+    )
+    fig.show()
+
+# ======================
+# 5. MAIN WORKFLOW
+# ======================
+if __name__ == "__main__":
+    # Data pipeline
+    df = pd.read_csv('portfolio_data.csv')
+    processed_df, quintile_cols = preprocess_data(df)
+    
+    # Analysis pipeline
+    long_impacts = calculate_bootstrap_impacts(processed_df, quintile_cols, 'long')
+    short_impacts = calculate_bootstrap_impacts(processed_df, quintile_cols, 'short')
+    
+    # Optimization
+    long_changes = build_optimizer(long_impacts)
+    short_changes = build_optimizer(short_impacts)
+    
+    # Generate all visualizations
+    plot_3d_factor_landscape(pd.concat([long_impacts, short_impacts]))
+    plot_penalty_sensitivity(long_impacts)
+    plot_factor_timeline(processed_df, quintile_cols[0])  # Example factor
+    plot_quintile_distribution(processed_df, quintile_cols[0])
+    
+    # Console output
+    print("Recommended Long Position Adjustments:")
+    for change in long_changes:
+        print(f"- {change['factor']}: {change['action'].upper()} | "
+              f"Impact: {change['impact']:.2f} | "
+              f"Prevalence: {change['prevalence']:.2%} | "
+              f"P-value: {change['pvalue']:.3f}")
+    
+    print("\nRecommended Short Position Adjustments:")
+    for change in short_changes:
+        print(f"- {change['factor']}: {change['action'].upper()} | "
+              f"Impact: {change['impact']:.2f} | "
+              f"Prevalence: {change['prevalence']:.2%} | "
+              f"P-value: {change['pvalue']:.3f}")
