@@ -1,0 +1,217 @@
+import pandas as pd
+import numpy as np
+import pulp
+import plotly.express as px
+from sklearn.utils import resample
+from sklearn.preprocessing import MinMaxScaler
+from tqdm import tqdm
+
+# ======================
+# 1. DATA PREPROCESSING
+# ======================
+def preprocess_data(df, return_col='normalized_return', impact_col='impact'):
+    """Normalize returns by holding period and create quintile binaries"""
+    df = df.copy()
+    
+    # Convert dates
+    df['start_date'] = pd.to_datetime(df['start_date'], format='%d-%m-%Y')
+    df['end_date'] = pd.to_datetime(df['end_date'], format='%d-%m-%Y')
+    
+    # Calculate holding period duration
+    df['duration_days'] = (df['end_date'] - df['start_date']).dt.days + 1
+    
+    # Normalize returns and impact by duration
+    df[f'{return_col}_daily'] = df[return_col] / df['duration_days']
+    df[f'{impact_col}_daily'] = df[impact_col] / df['duration_days']
+    
+    # Scale to [-1, 1]
+    scaler = MinMaxScaler(feature_range=(-1, 1))
+    df[[f'{return_col}_scaled', f'{impact_col}_scaled']] = scaler.fit_transform(
+        df[[f'{return_col}_daily', f'{impact_col}_daily']]
+    )
+    
+    # Create quintile binaries
+    quintile_cols = [col for col in df.columns if '-quintile' in col]
+    for col in quintile_cols:
+        df[f'{col}_top'] = (df[col] == 5).astype(int)
+        df[f'{col}_bottom'] = (df[col] == 1).astype(int)
+    
+    return df, quintile_cols
+
+# ==============================
+# 2. BOOTSTRAP IMPACT ANALYSIS
+# ==============================
+def calculate_bootstrap_impacts(df, quintile_cols, position='long', 
+                               n_bootstrap=500, penalty_weight=0.3):
+    """Calculate factor impacts with variance penalization"""
+    subset = df[df['position_type'] == position].copy()
+    impacts = []
+    
+    for col in tqdm(quintile_cols, desc=f"Processing {position} factors"):
+        # Filter groups
+        top_group = subset[subset[f'{col}_top'] == 1]['normalized_return_scaled']
+        bottom_group = subset[subset[f'{col}_bottom'] == 1]['normalized_return_scaled']
+        others = subset[(subset[f'{col}_top'] == 0) & (subset[f'{col}_bottom'] == 0)]['normalized_return_scaled']
+        
+        # Bootstrap sampling
+        top_impacts, bottom_impacts = [], []
+        for _ in range(n_bootstrap):
+            top_sample = resample(top_group, replace=True) if len(top_group) > 0 else []
+            bottom_sample = resample(bottom_group, replace=True) if len(bottom_group) > 0 else []
+            others_sample = resample(others, replace=True)
+            
+            if len(top_sample) > 0:
+                top_impacts.append(top_sample.mean() - others_sample.mean())
+            if len(bottom_sample) > 0:
+                bottom_impacts.append(bottom_sample.mean() - others_sample.mean())
+        
+        # Calculate variance penalty
+        top_var = np.var(top_impacts) if len(top_impacts) > 0 else 0
+        bottom_var = np.var(bottom_impacts) if len(bottom_impacts) > 0 else 0
+        
+        # Raw impacts
+        top_raw = top_group.mean() - others.mean() if len(top_group) > 0 else 0
+        bottom_raw = bottom_group.mean() - others.mean() if len(bottom_group) > 0 else 0
+        
+        # Adjusted impacts
+        top_adj = top_raw * (1 - penalty_weight * top_var)
+        bottom_adj = bottom_raw * (1 - penalty_weight * bottom_var)
+        
+        # Prevalence calculation
+        prevalence_top = top_group.count() / subset[col].count()
+        prevalence_bottom = bottom_group.count() / subset[col].count()
+        
+        impacts.append({
+            'factor': col,
+            'position': position,
+            'top_adj_impact': top_adj,
+            'bottom_adj_impact': bottom_adj,
+            'top_prevalence': prevalence_top,
+            'bottom_prevalence': prevalence_bottom,
+            'top_var': top_var,
+            'bottom_var': bottom_var
+        })
+    
+    return pd.DataFrame(impacts)
+
+# ======================
+# 3. OPTIMIZATION MODEL
+# ======================
+def build_optimizer(impact_df, prevalence_threshold=0.1, max_changes=3):
+    """MILP model with prevalence constraints"""
+    prob = pulp.LpProblem('Portfolio_Optimization', pulp.LpMaximize)
+    factors = impact_df['factor'].unique()
+    
+    # Decision variables
+    switch_top = pulp.LpVariable.dicts('switch_top', factors, cat='Binary')
+    switch_bottom = pulp.LpVariable.dicts('switch_bottom', factors, cat='Binary')
+    
+    # Objective function
+    prob += pulp.lpSum([
+        impact_df.loc[impact_df['factor'] == f, 'top_adj_impact'].values[0] * switch_top[f] +
+        impact_df.loc[impact_df['factor'] == f, 'bottom_adj_impact'].values[0] * switch_bottom[f]
+        for f in factors
+    ])
+    
+    # Constraints
+    for f in factors:
+        prob += switch_top[f] + switch_bottom[f] <= 1  # Mutual exclusivity
+    
+    prob += pulp.lpSum([switch_top[f] + switch_bottom[f] for f in factors]) <= max_changes
+    
+    # Prevalence constraint
+    prob += pulp.lpSum([
+        impact_df.loc[impact_df['factor'] == f, 'top_prevalence'].values[0] * switch_top[f] +
+        impact_df.loc[impact_df['factor'] == f, 'bottom_prevalence'].values[0] * switch_bottom[f]
+        for f in factors
+    ]) <= prevalence_threshold
+    
+    # Solve
+    prob.solve(pulp.PULP_CBC_CMD(msg=False))
+    
+    # Extract results
+    changes = []
+    for f in factors:
+        if switch_top[f].value() == 1:
+            changes.append({
+                'factor': f,
+                'action': 'top',
+                'impact': impact_df.loc[impact_df['factor'] == f, 'top_adj_impact'].values[0],
+                'prevalence': impact_df.loc[impact_df['factor'] == f, 'top_prevalence'].values[0]
+            })
+        elif switch_bottom[f].value() == 1:
+            changes.append({
+                'factor': f,
+                'action': 'bottom',
+                'impact': impact_df.loc[impact_df['factor'] == f, 'bottom_adj_impact'].values[0],
+                'prevalence': impact_df.loc[impact_df['factor'] == f, 'bottom_prevalence'].values[0]
+            })
+    
+    return sorted(changes, key=lambda x: abs(x['impact']), reverse=True)[:max_changes]
+
+# ======================
+# 4. VISUALIZATIONS
+# ======================
+def plot_impact_variance(impact_df, changes):
+    """Impact vs Variance tradeoff plot"""
+    df = impact_df.melt(id_vars=['factor'], 
+                       value_vars=['top_adj_impact', 'bottom_adj_impact'],
+                       var_name='action', value_name='impact')
+    
+    df['selected'] = np.where(df['factor'].isin([c['factor'] for c in changes]), 'Selected', 'Others')
+    df['variance'] = df.apply(lambda x: impact_df.loc[
+        (impact_df['factor'] == x['factor']) & 
+        (impact_df['position'] == x['action'].replace('_adj_impact', '')), 
+        'top_var' if 'top' in x['action'] else 'bottom_var'
+    ].values[0], axis=1)
+    
+    fig = px.scatter(
+        df,
+        x='impact',
+        y='variance',
+        color='selected',
+        size=df['impact'].abs(),
+        hover_name='factor',
+        title='Impact vs Variance Tradeoff'
+    )
+    fig.show()
+
+def plot_quintile_distribution(df, factor):
+    """Return distribution across quintiles"""
+    fig = px.violin(
+        df,
+        x=factor,
+        y='normalized_return_scaled',
+        box=True,
+        points="all",
+        title=f'Return Distribution: {factor}'
+    )
+    fig.show()
+
+# ======================
+# 5. MAIN WORKFLOW
+# ======================
+if __name__ == "__main__":
+    # Load and preprocess data
+    df = pd.read_csv('portfolio_data.csv')
+    processed_df, quintile_cols = preprocess_data(df)
+    
+    # Analyze long positions
+    long_impacts = calculate_bootstrap_impacts(processed_df, quintile_cols, 'long')
+    long_changes = build_optimizer(long_impacts)
+    
+    # Analyze short positions
+    short_impacts = calculate_bootstrap_impacts(processed_df, quintile_cols, 'short')
+    short_changes = build_optimizer(short_impacts)
+    
+    # Generate visualizations
+    plot_impact_variance(long_impacts, long_changes)
+    plot_quintile_distribution(processed_df, quintile_cols[0])  # Example factor
+    
+    print("Long Position Changes:")
+    for change in long_changes:
+        print(f"- {change['factor']}: {change['action'].upper()} (Impact: {change['impact']:.2f}, Prevalence: {change['prevalence']:.2%})")
+    
+    print("\nShort Position Changes:")
+    for change in short_changes:
+        print(f"- {change['factor']}: {change['action'].upper()} (Impact: {change['impact']:.2f}, Prevalence: {change['prevalence']:.2%})")
