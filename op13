@@ -1,0 +1,28 @@
+def calculate_recency(df, quintile_cols, recent_months=6, min_episodes=3):
+    """Calculate recency flags based on recent usage"""
+    current_date = df['start_date'].max()
+    recent_start = current_date - pd.DateOffset(months=recent_months)
+    
+    recency_data = []
+    
+    for col in quintile_cols:
+        # Filter recent episodes
+        recent_data = df[df['start_date'] >= recent_start]
+        
+        # Count recent episodes in top and bottom quintiles
+        top_recent = recent_data[recent_data[f'{col}_top'] == 1]
+        bottom_recent = recent_data[recent_data[f'{col}_bottom'] == 1]
+        
+        # Determine activity flags
+        top_active = len(top_recent) >= min_episodes
+        bottom_active = len(bottom_recent) >= min_episodes
+        
+        recency_data.append({
+            'factor': col,
+            'top_active': top_active,
+            'top_recent_episodes': len(top_recent),
+            'bottom_active': bottom_active,
+            'bottom_recent_episodes': len(bottom_recent)
+        })
+    
+    return pd.DataFrame(recency_data)
