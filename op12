@@ -1,0 +1,303 @@
+import pandas as pd
+import numpy as np
+import pulp
+import plotly.express as px
+from sklearn.utils import resample
+from sklearn.preprocessing import MinMaxScaler
+from dateutil.relativedelta import relativedelta
+from tqdm import tqdm
+from scipy.stats import percentileofscore
+
+# ======================
+# 1. DATA PREPROCESSING
+# ======================
+def preprocess_data(df, return_col='normalized_return'):
+    """Preprocess data with recency and usage magnitude tracking"""
+    df = df.copy()
+    df['start_date'] = pd.to_datetime(df['start_date'], format='%d-%m-%Y')
+    df['end_date'] = pd.to_datetime(df['end_date'], format='%d-%m-%Y')
+    
+    # Calculate holding period duration
+    df['duration_days'] = (df['end_date'] - df['start_date']).dt.days + 1
+    
+    # Normalize returns and impact by duration
+    df[f'{return_col}_daily'] = df[return_col] / df['duration_days']
+    
+    # Scale to [-1, 1]
+    scaler = MinMaxScaler(feature_range=(-1, 1))
+    df[f'{return_col}_scaled'] = scaler.fit_transform(df[[f'{return_col}_daily']])
+    
+    # Create quintile binaries
+    quintile_cols = [col for col in df.columns if '-quintile' in col]
+    for col in quintile_cols:
+        df[f'{col}_top'] = (df[col] == 5).astype(int)
+        df[f'{col}_bottom'] = (df[col] == 1).astype(int)
+    
+    return df, quintile_cols
+
+# ==============================
+# 2. ENHANCED RECENCY ANALYSIS
+# ==============================
+def calculate_time_decayed_usage(df, factor_col, decay_rate=0.1):
+    """Calculate time-decayed usage metrics with exponential weighting"""
+    current_date = df['start_date'].max()
+    df['months_ago'] = ((current_date - df['start_date']).dt.days // 30).clip(0, None)
+    
+    # Calculate exponential weights
+    df['weight'] = np.exp(-decay_rate * df['months_ago'])
+    
+    # Calculate weighted usage
+    usage = df.groupby(['months_ago', factor_col]).size().unstack(fill_value=0)
+    weighted_usage = usage.multiply(np.exp(-decay_rate * usage.index), axis=0).sum()
+    
+    # Normalize scores
+    scaler = MinMaxScaler()
+    weighted_usage_normalized = pd.Series(
+        scaler.fit_transform(weighted_usage.values.reshape(-1, 1)).flatten(),
+        index=weighted_usage.index
+    )
+    
+    return weighted_usage_normalized
+
+def calculate_performance_weighted_recency(df, factor_col, return_col, decay_rate=0.1):
+    """Calculate recency scores weighted by performance"""
+    current_date = df['start_date'].max()
+    df['months_ago'] = ((current_date - df['start_date']).dt.days // 30).clip(0, None)
+    
+    # Calculate performance-weighted scores
+    df['weight'] = np.exp(-decay_rate * df['months_ago']) * df[return_col]
+    performance_scores = df.groupby(factor_col)['weight'].sum()
+    
+    # Normalize scores
+    scaler = MinMaxScaler()
+    return pd.Series(
+        scaler.fit_transform(performance_scores.values.reshape(-1, 1)).flatten(),
+        index=performance_scores.index
+    )
+
+def enhanced_recency_analysis(df, quintile_cols, return_col='normalized_return'):
+    """Comprehensive recency analysis with multiple metrics"""
+    current_date = df['start_date'].max()
+    recency_data = []
+    
+    for col in tqdm(quintile_cols, desc="Analyzing recency"):
+        # Base data
+        factor_data = df[df[col].isin([1, 5])].copy()
+        
+        # Time-decayed usage
+        usage_scores = calculate_time_decayed_usage(factor_data, col)
+        
+        # Performance-weighted recency
+        performance_scores = calculate_performance_weighted_recency(factor_data, col, return_col)
+        
+        # Combined recency score
+        combined_score = 0.6 * performance_scores + 0.4 * usage_scores
+        
+        # Dynamic threshold calculation (using median-based cutoff)
+        threshold = np.percentile(combined_score, 70)
+        
+        recency_data.append({
+            'factor': col,
+            'recency_score': combined_score.get(5, 0),  # Top quintile
+            'bottom_score': combined_score.get(1, 0),   # Bottom quintile
+            'top_active': combined_score.get(5, 0) > threshold,
+            'bottom_active': combined_score.get(1, 0) > threshold,
+            'dynamic_threshold': threshold
+        })
+    
+    return pd.DataFrame(recency_data)
+
+# ==============================
+# 3. BOOTSTRAP IMPACT ANALYSIS
+# ==============================
+def calculate_bootstrap_impacts(df, quintile_cols, position='long', 
+                               n_bootstrap=500, penalty_weight=0.3):
+    """Calculate factor impacts with bootstrap significance testing"""
+    subset = df[df['position_type'] == position].copy()
+    impacts = []
+    
+    for col in tqdm(quintile_cols, desc=f"Analyzing {position} factors"):
+        # Groups
+        top = subset[subset[f'{col}_top'] == 1]
+        bottom = subset[subset[f'{col}_bottom'] == 1]
+        middle = subset[(subset[f'{col}_top'] == 0) & (subset[f'{col}_bottom'] == 0)]
+        
+        # Bootstrap sampling
+        top_impacts, bottom_impacts = [], []
+        for _ in range(n_bootstrap):
+            top_sample = resample(top['return_scaled'], replace=True) if len(top) > 0 else []
+            bottom_sample = resample(bottom['return_scaled'], replace=True) if len(bottom) > 0 else []
+            middle_sample = resample(middle['return_scaled'], replace=True)
+            
+            if len(top_sample) > 0:
+                top_impacts.append(top_sample.mean() - middle_sample.mean())
+            if len(bottom_sample) > 0:
+                bottom_impacts.append(bottom_sample.mean() - middle_sample.mean())
+        
+        # Calculate metrics
+        top_mean = np.mean(top_impacts) if len(top_impacts) > 0 else 0
+        bottom_mean = np.mean(bottom_impacts) if len(bottom_impacts) > 0 else 0
+        top_var = np.var(top_impacts) if len(top_impacts) > 0 else 0
+        bottom_var = np.var(bottom_impacts) if len(bottom_impacts) > 0 else 0
+        
+        # Empirical p-values
+        pval_top = 1 - percentileofscore(top_impacts, top_mean)/100 if len(top_impacts) > 0 else 1
+        pval_bottom = 1 - percentileofscore(bottom_impacts, bottom_mean)/100 if len(bottom_impacts) > 0 else 1
+        
+        # Adjusted impacts with penalties
+        top_adj = top_mean * (1 - penalty_weight * top_var) * (-np.log(pval_top + 1e-10))
+        bottom_adj = bottom_mean * (1 - penalty_weight * bottom_var) * (-np.log(pval_bottom + 1e-10))
+        
+        # Prevalence calculation
+        prevalence_top = len(top) / len(subset) if len(subset) > 0 else 0
+        prevalence_bottom = len(bottom) / len(subset) if len(subset) > 0 else 0
+        
+        impacts.append({
+            'factor': col,
+            'position': position,
+            'top_adj_impact': top_adj,
+            'bottom_adj_impact': bottom_adj,
+            'top_pvalue': pval_top,
+            'bottom_pvalue': pval_bottom,
+            'top_prevalence': prevalence_top,
+            'bottom_prevalence': prevalence_bottom,
+            'top_var': top_var,
+            'bottom_var': bottom_var
+        })
+    
+    return pd.DataFrame(impacts)
+
+# ======================
+# 4. OPTIMIZATION MODEL
+# ======================
+def build_optimizer_with_enhanced_recency(impact_df, recency_df, prevalence_threshold=0.1, max_changes=3):
+    """Optimizer with enhanced recency constraints"""
+    prob = pulp.LpProblem('Enhanced_Recency_Optimization', pulp.LpMaximize)
+    
+    # Merge datasets
+    merged_df = impact_df.merge(recency_df, on='factor')
+    
+    # Create decision variables
+    switch_top = pulp.LpVariable.dicts('switch_top', merged_df['factor'], cat='Binary')
+    switch_bottom = pulp.LpVariable.dicts('switch_bottom', merged_df['factor'], cat='Binary')
+    
+    # Objective function with recency weighting
+    prob += pulp.lpSum([
+        (row['top_adj_impact'] * row['recency_score'] * switch_top[row['factor']]) +
+        (row['bottom_adj_impact'] * row['bottom_score'] * switch_bottom[row['factor']])
+        for _, row in merged_df.iterrows()
+    ])
+    
+    # Constraints
+    for _, row in merged_df.iterrows():
+        # Maintain active positions unless score drops below threshold
+        if row['top_active']:
+            prob += switch_top[row['factor']] == 1
+        if row['bottom_active']:
+            prob += switch_bottom[row['factor']] == 1
+        
+        # Mutual exclusivity
+        prob += switch_top[row['factor']] + switch_bottom[row['factor']] <= 1
+    
+    # Prevalence constraint
+    prob += pulp.lpSum([
+        row['top_prevalence'] * switch_top[row['factor']] + 
+        row['bottom_prevalence'] * switch_bottom[row['factor']]
+        for _, row in merged_df.iterrows()
+    ]) <= prevalence_threshold
+    
+    # Solve and return results
+    prob.solve()
+    changes = []
+    for _, row in merged_df.iterrows():
+        if switch_top[row['factor']].value() == 1:
+            changes.append({
+                'factor': row['factor'],
+                'action': 'top',
+                'impact': row['top_adj_impact'],
+                'prevalence': row['top_prevalence'],
+                'pvalue': row['top_pvalue']
+            })
+        elif switch_bottom[row['factor']].value() == 1:
+            changes.append({
+                'factor': row['factor'],
+                'action': 'bottom',
+                'impact': row['bottom_adj_impact'],
+                'prevalence': row['bottom_prevalence'],
+                'pvalue': row['bottom_pvalue']
+            })
+    
+    return sorted(changes, key=lambda x: abs(x['impact']), reverse=True)[:max_changes]
+
+# ======================
+# 5. ACTIONABLE RECOMMENDATIONS
+# ======================
+def generate_actionable_recommendations(changes, recency_df):
+    """Convert optimization results to PM-friendly actions"""
+    recommendations = []
+    
+    for change in changes:
+        factor_data = recency_df[recency_df['factor'] == change['factor']].iloc[0]
+        action = change['action']
+        
+        # Base recommendation
+        if action == 'top':
+            current_state = "active" if factor_data['top_active'] else "inactive"
+            recommendation = {
+                'action': f"Prioritize {factor_data['factor']} in top quintile",
+                'rationale': [
+                    f"Recency score: {factor_data['recency_score']:.2f}",
+                    f"Dynamic threshold: {factor_data['dynamic_threshold']:.2f}",
+                    "Active" if factor_data['top_active'] else "Inactive"
+                ]
+            }
+        else:
+            current_state = "active" if factor_data['bottom_active'] else "inactive"
+            recommendation = {
+                'action': f"Underweight {factor_data['factor']} in bottom quintile",
+                'rationale': [
+                    f"Recency score: {factor_data['bottom_score']:.2f}",
+                    f"Dynamic threshold: {factor_data['dynamic_threshold']:.2f}",
+                    "Active" if factor_data['bottom_active'] else "Inactive"
+                ]
+            }
+        
+        # Add context
+        recommendation.update({
+            'factor': factor_data['factor'],
+            'current_state': current_state,
+            'expected_impact': change['impact'],
+            'confidence': min(1 - change['pvalue'], 0.99)  # Cap at 99%
+        })
+        
+        recommendations.append(recommendation)
+    
+    return pd.DataFrame(recommendations)
+
+# ======================
+# 6. MAIN WORKFLOW
+# ======================
+if __name__ == "__main__":
+    # Load and preprocess data
+    df = pd.read_csv('portfolio_data.csv')
+    processed_df, quintile_cols = preprocess_data(df)
+    
+    # Enhanced recency analysis
+    recency_df = enhanced_recency_analysis(processed_df, quintile_cols)
+    
+    # Analyze long positions
+    long_impacts = calculate_bootstrap_impacts(processed_df, quintile_cols, 'long')
+    long_changes = build_optimizer_with_enhanced_recency(long_impacts, recency_df)
+    long_recommendations = generate_actionable_recommendations(long_changes, recency_df)
+    
+    # Analyze short positions
+    short_impacts = calculate_bootstrap_impacts(processed_df, quintile_cols, 'short')
+    short_changes = build_optimizer_with_enhanced_recency(short_impacts, recency_df)
+    short_recommendations = generate_actionable_recommendations(short_changes, recency_df)
+    
+    # Output results
+    print("Long Position Recommendations:")
+    print(long_recommendations.to_string(index=False))
+    
+    print("\nShort Position Recommendations:")
+    print(short_recommendations.to_string(index=False))
