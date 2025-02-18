@@ -1,0 +1,16 @@
+# Clip to 5th-95th percentiles before scaling
+def robust_scale(series):
+    if series.nunique() == 1:  # Handle constant values
+        return pd.Series(np.zeros_like(series), index=series.index
+    
+    # Calculate percentiles
+    lower = series.quantile(0.05)
+    upper = series.quantile(0.95)
+    
+    # Clip and scale
+    clipped = series.clip(lower, upper)
+    return (clipped - clipped.min()) / (clipped.max() - clipped.min())
+
+# Apply to columns
+flat_file['normalized_input_scaled'] = robust_scale(flat_file['normalized_input'])
+flat_file['normalized_return_scaled'] = robust_scale(flat_file['normalized_return'])
