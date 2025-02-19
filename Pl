@@ -1,0 +1,118 @@
+import pandas as pd
+import plotly.graph_objects as go
+
+# -----------------------------------------------------------------------------
+# 1. Load your DataFrame (df) from CSV, Excel, or however you have it.
+#    For example (pseudo-code):
+# df = pd.read_csv("your_factor_file.csv")
+
+# Columns assumed to exist in df:
+#   factor, top_adjusted, bottom_adjusted, top_size, bottom_size, position
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# 2. Suppose you have your dictionary of changes like in your screenshot:
+long_changes = [
+    {"factor": "sgrep.alpha:raw.vol_lyr-quintile", "action": "long"},
+    {"factor": "sbstore:sgrep.alpha:global.allcap.pcmn-qual-quintile", "action": "short"},
+    # ...
+]
+# Extract factor names from that dictionary into a Python set for quick membership check:
+highlight_factors = set(item["factor"] for item in long_changes)
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# 3. Add a column in df that flags whether the factor is in highlight_factors
+df['highlight'] = df['factor'].isin(highlight_factors)
+# -----------------------------------------------------------------------------
+
+# (Optional) If you want to combine top_size & bottom_size into one bubble-size measure:
+# df['bubble_size'] = df['top_size'] + df['bottom_size']
+
+# Otherwise, choose one of them for the bubble size:
+df['bubble_size'] = df['top_size']  # or bottom_size, your choice
+
+# -----------------------------------------------------------------------------
+# 4. Create separate DataFrames for highlighted vs. normal factors, if you want different marker styling:
+df_highlight = df[df['highlight'] == True]
+df_normal = df[df['highlight'] == False]
+
+# Create the Plotly figure:
+fig = go.Figure()
+
+# Add trace for normal factors (not highlighted)
+fig.add_trace(
+    go.Scatter(
+        x=df_normal['top_adjusted'],
+        y=df_normal['bottom_adjusted'],
+        mode='markers',
+        name='Normal Factors',
+        text=df_normal['factor'],  # This is the text that appears on hover if you want
+        hovertemplate=(
+            '<b>Factor:</b> %{text}<br>' +
+            'Top Adjusted: %{x:.2f}<br>' +
+            'Bottom Adjusted: %{y:.2f}<br>' +
+            # add more columns if needed
+            '<extra></extra>'
+        ),
+        marker=dict(
+            size=df_normal['bubble_size'],
+            color='blue',
+            opacity=0.6,
+            sizemode='area',  # area-based sizing so that bigger differences look bigger
+            sizeref=2.*max(df['bubble_size'])/(40.**2),  # tweak for bubble size
+            sizemin=4  # minimum size of the bubble
+        )
+    )
+)
+
+# Add trace for highlighted factors
+fig.add_trace(
+    go.Scatter(
+        x=df_highlight['top_adjusted'],
+        y=df_highlight['bottom_adjusted'],
+        mode='markers+text',  # show markers and text
+        name='Highlighted Factors',
+        text=df_highlight['factor'],  
+        textposition='top center',  # position the text above the marker
+        textfont=dict(color='red', size=10),  # style the text
+        hovertemplate=(
+            '<b>Factor:</b> %{text}<br>' +
+            'Top Adjusted: %{x:.2f}<br>' +
+            'Bottom Adjusted: %{y:.2f}<br>' +
+            '<extra></extra>'
+        ),
+        marker=dict(
+            size=df_highlight['bubble_size'],
+            color='red',
+            symbol='star',  # star shape for highlight
+            opacity=0.8,
+            sizemode='area',
+            sizeref=2.*max(df['bubble_size'])/(40.**2),
+            sizemin=6
+        )
+    )
+)
+
+# -----------------------------------------------------------------------------
+# 5. Enhance the layout with titles, axis labels, etc.
+fig.update_layout(
+    title='Factor Top/Bottom Quintile Performance',
+    xaxis=dict(
+        title='Top Adjusted Performance',
+        zeroline=True
+    ),
+    yaxis=dict(
+        title='Bottom Adjusted Performance',
+        zeroline=True
+    ),
+    legend=dict(
+        x=0.02, y=0.98,  # place legend top-left
+        bgcolor='rgba(0,0,0,0)',
+        bordercolor='rgba(0,0,0,0)'
+    ),
+    hovermode='closest'
+)
+
+# Show the figure
+fig.show()
