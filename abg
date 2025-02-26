@@ -1,0 +1,46 @@
+import re
+
+def increment_reference_numbers(formula, increment=1):
+    """
+    Increments row numbers in references of the form:
+      [someNumber]RMC!A123
+    or
+      =[someNumber]RMC!A123
+    Multiple references in one formula are all incremented.
+    """
+    # Explanation of the pattern:
+    #  1) (\=?\[\d+\][A-Za-z]+!) : An optional '=' at the start, then e.g. [28]RMC!
+    #  2) ([A-Za-z]+)           : The column letters (e.g. A, B, I, etc.)
+    #  3) (\d+)                 : The row number (one or more digits)
+    #
+    # This will match references like:
+    #   =[28]RMC!I035
+    #   [20]RMC!C10
+    #   =[99]RMC!ABC123
+    #
+    # And it will do so repeatedly throughout the formula.
+    pattern = r'(\=?\[\d+\][A-Za-z]+!)([A-Za-z]+)(\d+)'
+    
+    def replace_match(match):
+        prefix = match.group(1)         # e.g., "=[28]RMC!"
+        column = match.group(2)         # e.g., "I"
+        row_num = int(match.group(3))   # e.g., 35
+        new_row_num = row_num + increment
+        return f"{prefix}{column}{new_row_num}"
+    
+    return re.sub(pattern, replace_match, formula)
+
+# ----------------
+# Example Usage
+# ----------------
+formula1 = "=[28]RMC!I035" 
+# Single reference: will become "=[28]RMC!I36"
+print(increment_reference_numbers(formula1))
+
+formula2 = "=[28]RMC!I035,[28]RMC!J036"
+# Two references: will become "=[28]RMC!I36,[28]RMC!J37"
+print(increment_reference_numbers(formula2))
+
+formula3 = "=SUM([28]RMC!A10 + [28]RMC!B20)"
+# Two references in a sum: will become "=SUM([28]RMC!A11 + [28]RMC!B21)"
+print(increment_reference_numbers(formula3))
