@@ -1,0 +1,17 @@
+import re
+
+def increment_reference_numbers(formula):
+    pattern = r'(=\[\d+\][A-Za-z]+!)([A-Za-z]+)(\d+)'
+    
+    def replace_match(match):
+        prefix = match.group(1)       # e.g., "=[28]RMC!"
+        column = match.group(2)       # e.g., "I"
+        row_num = int(match.group(3)) # e.g., 35
+        new_row_num = row_num + 1     # e.g., 36
+        return f"{prefix}{column}{new_row_num}"  # e.g., "=[28]RMC!I36"
+    
+    return re.sub(pattern, replace_match, formula)
+
+# Test
+formula = "=[28]RMC!I035"
+print(increment_reference_numbers(formula))  # Outputs: "=[28]RMC!I36"
