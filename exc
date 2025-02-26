@@ -1,0 +1,147 @@
+import re
+import os
+from openpyxl import load_workbook
+import logging
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filename='excel_reference_update.log'
+)
+
+def increment_reference_numbers(formula):
+    """
+    Increment cell references in Excel formulas, focusing on these formats:
+    1. =Z:\Fred\Models\2025\[Enagas 2025 v2.xlsx]RMC!F58
+    2. =Z:\Fred\Models\2025\[Enagas 2025 v2.xlsx]RMC!F53+Z:\Fred\Models\2025\[Enagas 2025 v2.xlsx]RMC!F57
+    """
+    # Pattern matches file path and reference like Z:\Fred\Models\2025\[Enagas 2025 v2.xlsx]RMC!F58
+    # Group 1: Full path up to and including sheet name (e.g., Z:\Fred\Models\2025\[Enagas 2025 v2.xlsx]RMC!)
+    # Group 2: Column letter (e.g., F)
+    # Group 3: Row number (e.g., 58)
+    pattern = r'(=?[A-Za-z]:\\.*?\[.*?\].*?!)([A-Za-z]+)(\d+)'
+    
+    def replace_match(match):
+        prefix = match.group(1)  # Path + sheet reference
+        column = match.group(2)  # Column letter
+        row_num = int(match.group(3))  # Row number
+        
+        # Increment row number by 1
+        new_row_num = row_num + 1
+        
+        return f"{prefix}{column}{new_row_num}"
+    
+    # Apply the replacement
+    return re.sub(pattern, replace_match, formula)
+
+def process_excel_file(file_path):
+    """Process the Excel file by incrementing cell references starting from the 'Free Cash Flow' row, excluding the first five sheets."""
+    try:
+        logging.info(f"Processing file: {file_path}")
+        
+        # Load the workbook
+        wb = load_workbook(file_path, data_only=False)
+        logging.info(f"Found {len(wb.sheetnames)} sheets in the workbook")
+        
+        # Number of sheets to exclude from the beginning
+        num_exclude = 5
+        
+        # Log the sheets being skipped
+        skipped_sheets = wb.sheetnames[:num_exclude]
+        logging.info(f"Skipping the first {num_exclude} sheets: {skipped_sheets}")
+        
+        # Track changes
+        total_changes = 0
+        processed_sheets = 0
+        
+        # Process each sheet after the first five
+        for sheet_name in wb.sheetnames[num_exclude:]:
+            sheet = wb[sheet_name]
+            logging.info(f"Processing sheet: {sheet_name}")
+            
+            # Flag to indicate if we've found "Free Cash Flow"
+            found_fcf = False
+            sheet_changes = 0
+            
+            # Iterate through each row in the sheet
+            for row_idx, row in enumerate(sheet.iter_rows(), 1):
+                # Check if this row contains "Free Cash Flow" (case-insensitive)
+                for cell in row:
+                    cell_value = cell.value
+                    if cell_value and isinstance(cell_value, str) and "free cash flow" in cell_value.lower():
+                        found_fcf = True
+                        logging.info(f"Found 'Free Cash Flow' in sheet {sheet_name} at row {row_idx}")
+                        break
+                
+                # If we've found "Free Cash Flow", process formulas in this row and subsequent rows
+                if found_fcf:
+                    for cell in row:
+                        # Process the cell based on its type
+                        if cell.data_type == 'f':  # Formula
+                            old_formula = cell.value  # Use cell.value for formulas
+                            new_formula = increment_reference_numbers(old_formula)
+                            
+                            if old_formula != new_formula:
+                                cell.value = new_formula  # Update formula
+                                sheet_changes += 1
+                                logging.debug(f"Changed formula in {sheet_name} cell {cell.coordinate}: {old_formula} -> {new_formula}")
+                        
+                        # Check for string values that might contain references
+                        elif isinstance(cell.value, str):
+                            old_value = cell.value
+                            # Only process if it starts with = and looks like a formula
+                            if old_value.startswith('=') and ('\\' in old_value or '[' in old_value):
+                                new_value = increment_reference_numbers(old_value)
+                                
+                                if old_value != new_value:
+                                    cell.value = new_value
+                                    sheet_changes += 1
+                                    logging.debug(f"Changed value in {sheet_name} cell {cell.coordinate}: {old_value} -> {new_value}")
+            
+            if not found_fcf:
+                logging.info(f"'Free Cash Flow' not found in sheet {sheet_name}. No changes made.")
+            else:
+                total_changes += sheet_changes
+                if sheet_changes > 0:
+                    processed_sheets += 1
+                    logging.info(f"Made {sheet_changes} changes in sheet {sheet_name}")
+                else:
+                    logging.info(f"No changes needed in sheet {sheet_name} after 'Free Cash Flow'")
+        
+        # Create a new filename with _modified suffix
+        file_name, file_ext = os.path.splitext(file_path)
+        new_file_path = f"{file_name}_modified{file_ext}"
+        
+        # Save the modified workbook
+        wb.save(new_file_path)
+        logging.info(f"Modified workbook saved as: {new_file_path}")
+        logging.info(f"Total changes: {total_changes} across {processed_sheets} sheets")
+        
+        return new_file_path, total_changes, processed_sheets
+    
+    except Exception as e:
+        logging.error(f"Error processing file: {str(e)}", exc_info=True)
+        raise
+
+def main():
+    """Main function to run the script."""
+    print("Excel Reference Updater - Increments cell references by 1 starting from 'Free Cash Flow', excluding the first five sheets")
+    file_path = input("Enter the path to the Excel file: ")
+    
+    if not os.path.exists(file_path):
+        print(f"Error: File not found at {file_path}")
+        return
+    
+    try:
+        modified_file, total_changes, processed_sheets = process_excel_file(file_path)
+        print(f"\nProcessing complete!")
+        print(f"- Made {total_changes} changes across {processed_sheets} sheets")
+        print(f"- Modified file saved as: {modified_file}")
+        print(f"- See excel_reference_update.log for details")
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        print("Check excel_reference_update.log for more details")
+
+if __name__ == "__main__":
+    main()
