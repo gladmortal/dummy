@@ -1,0 +1,38 @@
+I’ll extract the text from these images for you. Let me process them now.
+
+Here is the extracted text from your images:
+
+⸻
+
+Slide 4
+
+For this prototype demonstration, we have taken most of the global & quant factors to test the ability of the recommender.
+→ [This tool]
+
+⸻
+
+Slide 5
+
+→ This is how recommended screen looks like for Screening. (PAK about Quintile)
+→ Look at area of [crossed-out text]
+→ So you are looking at our parity at the year of your performance-driven split by Underweight & Overweight.
+
+⸻
+
+Slide 6
+
+The tool takes the top & bottom quintiles of the factor data for overweight & underweight / 4.
+It scores based on normalized return.
+This score is penalized if that quintile bucket is very highly volatile or not statistically significant.
+
+→ The tool is flexible through its constraint setting to tune the recommendations.
+→ Few constraints we have used are:
+	•	Suggest factor quintile with some recent initiation.
+	•	Portfolio Remove
+
+→ Significance & Randomness of the Quintile.
+→ Constraint setting can be adjusted to align with investment style needs.
+
+⸻
+
+Let me know if you need any refinements or clarifications!
