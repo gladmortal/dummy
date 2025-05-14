@@ -1,0 +1,205 @@
+from datetime import date
+from typing import Dict, List, Union
+
+import yaml
+from pyspark.sql import DataFrame, SparkSession, Window
+from pyspark.sql import functions as f
+from pyspark.sql.column import Column
+
+# -----------------------------------------------------------------------------
+# 1) QUANTILE HELPERS
+# -----------------------------------------------------------------------------
+
+def _get_percentile_col(
+    value_col: Union[str, Column],
+    window: Window,
+    edges: List[float] = [0.2, 0.4, 0.6, 0.8]
+) -> Column:
+    """
+    Global quantile buckets per factor.
+    """
+    vc = f.col(value_col) if isinstance(value_col, str) else value_col
+    # for each percentile edge, check ≤, then accumulate with when()
+    out = f.when(_less_than_or_equal_percentile(vc, edges[0], window), f.lit(1))
+    for i, pct in enumerate(edges[1:], start=2):
+        out = out.when(_less_than_or_equal_percentile(vc, pct, window), f.lit(i))
+    return out.otherwise(f.lit(len(edges) + 1))
+
+
+def _get_daily_quintile_col(
+    value_col: Union[str, Column],
+    window: Window,
+    edges: List[float] = [0.2, 0.4, 0.6, 0.8]
+) -> Column:
+    """
+    Rolling/windowed quantile per factor & date, using your existing _get_percentile_col.
+    We assume `window` is already partitioned by factor and ordered by date.
+    """
+    # delegate back to percentile logic but on the rolling window
+    return _get_percentile_col(value_col, window, edges)
+
+
+def _get_rank_quintile_col(
+    value_col: Union[str, Column],
+    date_col: str,
+    bins: int = 5
+) -> Column:
+    """
+    Percentile‐rank within each date, then cut into `bins` equal‐width slices.
+    """
+    vc = f.col(value_col) if isinstance(value_col, str) else value_col
+    # compute pct rank per date
+    pct = f.percent_rank().over(
+        Window.partitionBy(date_col).orderBy(vc)
+    )
+    # slice [0,1] into `bins` equal intervals
+    return f.ntile(bins).over(
+        Window.partitionBy(date_col).orderBy(vt:=vc)  # assign to avoid lint errors
+    )
+
+
+def _less_than_or_equal_percentile(
+    vc: Column,
+    pct: float,
+    window: Window
+) -> Column:
+    """
+    Boolean: vc ≤ the `pct` percentile over `window`.
+    """
+    return vc <= f.percentile_cont(pct).withinGroup(vc.asc()).over(window)
+
+
+def _get_custom_quintile_col(
+    value_col: str,
+    window: Window,
+    factor_type_map_col: Column,
+    date_col: str,
+    default_type: str = "regular",
+    edges: List[float] = [0.2, 0.4, 0.6, 0.8],
+    rank_bins: int = 5
+) -> Column:
+    """
+    Dispatch to one of the three methods based on the factor_type_map_col string.
+    """
+    vc = f.col(value_col)
+    ft = factor_type_map_col
+
+    return (
+        f.when(ft == "daily",
+               _get_daily_quintile_col(vc, window, edges)
+              )
+         .when(ft == "rank",
+               _get_rank_quintile_col(vc, date_col, rank_bins)
+              )
+         .otherwise(
+               _get_percentile_col(vc, window, edges)
+              )
+    )
+
+# -----------------------------------------------------------------------------
+# 2) MAIN PIPELINE
+# -----------------------------------------------------------------------------
+
+def _get_factors_data(
+    session: SparkSession,
+    sf_env: str,
+    account_code: str,
+    start_date: date,
+    end_date: date,
+    yaml_path: str,               # path to your factor-type YAML
+    daily_window: int = 5,
+    quantile_edges: List[float] = [0.2, 0.4, 0.6, 0.8],
+    rank_bins: int = 5
+) -> DataFrame:
+    """
+    1. Load whitelisted factors + their types from YAML.
+    2. Pull factor values.
+    3. Join to assets & episodes, and compute per-factor quintile buckets.
+    """
+    # --- load YAML factor → factor_type mapping ---
+    with open(yaml_path, "r") as f_yaml:
+        cfg = yaml.safe_load(f_yaml)
+    # assume cfg is { account_code: { factor: { factor_type: "daily" } } }
+    raw = cfg.get(account_code, {})
+    factor_type_mapping: Dict[str,str] = {
+        fac: details.get("factor_type", "regular")
+        for fac, details in raw.items()
+    }
+    factors = list(factor_type_mapping.keys())
+    quint_cols = [f"{c}_quintile" for c in factors]
+
+    # --- pull raw factor data from Snowflake ---
+    tables = PrMoneyballTable.load(sf_env)
+    episodes = (
+        session.table(tables.episodes)
+               .filter(f.col("account_code")==account_code)
+               .select("episode_id", f.col("start_date").alias("DATE"), "asset")
+    )
+    factors_df = (
+        session.table(tables.factors)
+               .filter(
+                   (f.col("account_code")==account_code) &
+                   (f.col("date") >= f.lit(start_date)) &
+                   (f.col("date") <= f.lit(end_date)) &
+                   f.col("factor").isin(factors)
+               )
+               .select("asset", "date", "factor", f.col("value").cast("double"))
+    )
+
+    # --- build a Spark map of factor→factor_type & expose it as a column ---
+    # create_map expects [key1, val1, key2, val2, ...]
+    m = []
+    for k,v in factor_type_mapping.items():
+        m += [f.lit(k), f.lit(v)]
+    factor_type_map = f.create_map(*m)
+    factors_df = factors_df.withColumn(
+        "factor_type", factor_type_map[f.col("factor")]
+    )
+
+    # --- define rolling window for percentiles & daily quantiles ---
+    win = (
+        Window.partitionBy("factor")
+              .orderBy("date")
+              .rowsBetween(-daily_window+1, 0)
+    )
+
+    # --- compute buckets ---
+    bucketed = (
+        factors_df
+        # join episodes to know which episode each (asset,date) belongs to
+        .join(episodes, on=["asset","date"], how="inner")
+        # compute custom quintile
+        .withColumn(
+            "bucket",
+            _get_custom_quintile_col(
+                value_col="value",
+                window=win,
+                factor_type_map_col=f.col("factor_type"),
+                date_col="date",
+                edges=quantile_edges,
+                rank_bins=rank_bins
+            )
+        )
+    )
+
+    # --- pivot out each factor into its own column ---
+    # e.g. { factor → value, factor_quintile → bucket }
+    aggs = []
+    for fac, qc in zip(factors, quint_cols):
+        aggs.append(
+            f.max(
+                f.when(f.col("factor")==fac, f.col("value"))
+            ).alias(fac)
+        )
+        aggs.append(
+            f.max(
+                f.when(f.col("factor")==fac, f.col("bucket"))
+            ).alias(qc)
+        )
+
+    result = (
+        bucketed.groupBy("episode_id", "asset", "date")
+                .agg(*aggs)
+                .orderBy("date", "asset")
+    )
+    return result
