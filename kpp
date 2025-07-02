@@ -1,0 +1,52 @@
+## Agent Handoff Document: Intra-Episode Quantile MILP Recommendations (v5)
+
+### 1. Project Objective
+
+Provide **intra-episode, factor-level** recommendations by comparing an **open episode** against historical **closed episodes**. Leverage pre-quantiled factor states and historical rolling returns to:
+
+1. Score each factor’s expected performance at the episode’s current stage.
+2. Optimize a small MILP to select the most beneficial factor adjustments.
+3. Produce visual explanations of historical outcomes for interpretability.
+
+---
+
+### 2. Core Logical Workflow
+
+1. **Align by Relative Episode Progress**
+
+   * Define **relative\_day** as days elapsed since episode start.
+   * **Rationale**: Dynamics at entry, mid-hold, and near-exit often differ; grouping by relative\_day ensures apples-to-apples comparisons of factor impacts.
+
+2. **Quantile & Outcome Mapping**
+
+   * Historical closed episodes: for each factor F and quantile Q at relative\_day d, compile samples of rolling\_returns from day d to episode end.
+   * Summarize these samples with mean (μ) and volatility (σ), capturing the expected continuation performance.
+
+3. **Real-Time Factor Scoring**
+
+   * For an open episode at day d, identify each factor’s quantile Q.
+   * Retrieve its historical μ and σ for (F, Q, d).
+   * Compute risk-adjusted score: $S = μ - λ·σ$, where λ weights aversion to volatility.
+
+4. **MILP-Based Decision**
+
+   * **Variables**: binary x\_F indicating whether to retain/increase (x=1) or reduce/de-emphasize (x=0) factor F.
+   * **Objective**: maximize $\sum_F S_F x_F$.
+   * **Constraints**: limit to K adjustments, enforce business rules (e.g. no contradictory factor actions), and only consider factors active in the open episode.
+
+5. **Explainable Visualizations**
+
+   * For each selected factor, display the historical distribution of rolling\_returns at (Q, d) via histogram or boxplot.
+   * Annotate with μ, σ, and key percentiles to clarify typical vs. extreme outcomes.
+
+---
+
+### 3. Sensibility of Relative-Day Grouping
+
+* **Why It Works**: Episode lifecycle stages—entry, middle, exit—exhibit distinct risk/return profiles. Quantile impacts can evolve (e.g., early momentum may be predictive, but late-stage momentum might signal mean reversion).
+* **Preventing Bias**: Comparing across episodes at the same relative\_day ensures you’re not mixing data from different lifecycle contexts.
+* **Statistical Robustness**: If sample sizes for extreme relative\_days are small, one can aggregate adjacent days or apply smoothing across d ± Δ.
+
+---
+
+**Deliverable**: A concise, logic-focused enhancement to `run_optimizer.py` that implements the above workflow, ensuring the PM receives timely, explainable factor recommendations based on stage-aware historical performance.
